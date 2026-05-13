@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import analytics, ingest, market, products, suppliers
+from app.api import analytics, ingest, market, ops, products, suppliers
 from app.core.config import settings
 from app.db.database import init_db
 from app.schemas import HealthResponse, RootResponse
@@ -36,6 +36,7 @@ def create_app() -> FastAPI:
     app.include_router(market.router, prefix="/api/market", tags=["market"])
     app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
     app.include_router(ingest.router, prefix="/api/ingest", tags=["ingest"])
+    app.include_router(ops.router, prefix="/api/ops", tags=["ops"])
 
     @app.get("/", response_model=RootResponse)
     async def root():

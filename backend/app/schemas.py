@@ -120,6 +120,107 @@ class IngestResult(BaseModel):
     message: str
 
 
+class ScrapeRequest(BaseModel):
+    url: str = Field(pattern=r"^https?://", max_length=500)
+    source: str = Field(default="Website", min_length=2, max_length=50)
+    seller_name: str | None = Field(default=None, max_length=255)
+    seller_source: str = Field(default="website", min_length=2, max_length=50)
+    location: str | None = Field(default=None, max_length=100)
+    max_items: int = Field(default=25, ge=1, le=100)
+    ingest: bool = True
+    context_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "price",
+            "market",
+            "shop",
+            "store",
+            "supplier",
+            "wholesale",
+            "retail",
+            "product",
+            "nigeria",
+            "naira",
+        ],
+        max_length=25,
+    )
+
+
+class ScrapedListingPreview(BaseModel):
+    source: str
+    original_name: str
+    price: float
+    seller_name: str
+    seller_source: str
+    location: str | None = None
+    url: str | None = None
+
+
+class ScrapeIngestResult(BaseModel):
+    scraped: int
+    ingested: int
+    listings: list[ScrapedListingPreview]
+    message: str
+
+
+class CleanCsvResult(BaseModel):
+    file_id: str
+    download_filename: str
+    rows_before: int
+    rows_after: int
+    duplicates_removed: int
+    columns: list[str]
+    detected_name_column: str | None = None
+    detected_price_column: str | None = None
+    detected_date_column: str | None = None
+    missing_before: dict[str, int]
+    missing_after: dict[str, int]
+    preview: list[dict]
+    message: str
+
+
+class OpsMetric(BaseModel):
+    label: str
+    value: str
+    tone: str = "default"
+
+
+class OpsTask(BaseModel):
+    id: str
+    title: str
+    stage: str
+    owner: str
+    source: str
+    eta: str
+    progress: int
+    listings: int
+    note: str
+
+
+class OpsReviewAlert(BaseModel):
+    id: str
+    product: str
+    issue: str
+    severity: str
+    delta: float
+
+
+class OpsRecentListing(BaseModel):
+    id: int
+    product_name: str
+    price: float
+    seller: str
+    source: str
+    location: str | None = None
+    is_suspicious: bool
+
+
+class OpsOverview(BaseModel):
+    queue_metrics: list[OpsMetric]
+    tasks: list[OpsTask]
+    review_alerts: list[OpsReviewAlert]
+    recent_listings: list[OpsRecentListing]
+
+
 class NormalizationResult(BaseModel):
     message: str
     linked_count: int

@@ -19,6 +19,14 @@ frontend/.env.local
 # Local data
 *.db
 test_marketsense.db
+crawl4ai-reference/
+backend/data/cleaned_uploads/
+data/*_10k.csv
+data/*_1m.csv
+data/category_summary_*.csv
+data/source_summary_*.csv
+*.log
+*.err
 
 # OS/editor
 .DS_Store

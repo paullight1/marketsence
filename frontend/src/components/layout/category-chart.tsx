@@ -1,42 +1,36 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { categoryDistribution } from "@/lib/data/mockData";
+import { CategoryBreakdown } from "@/lib/api";
 
-export function CategoryChart() {
-  const total = categoryDistribution.reduce((acc, item) => acc + item.value, 0);
+type CategoryChartProps = {
+  categories?: CategoryBreakdown[];
+};
 
-  const colors = [
-    "bg-primary",
-    "bg-blue-500",
-    "bg-green-500",
-    "bg-orange-500",
-    "bg-purple-500",
-  ];
+export function CategoryChart({ categories = [] }: CategoryChartProps) {
+  const total = categories.reduce((acc, item) => acc + item.count, 0);
 
   return (
-    <Card>
+    <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
       <CardHeader>
         <CardTitle>Category Distribution</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {categoryDistribution.map((cat, index) => {
-          const percentage = (cat.value / total) * 100;
+        {categories.map((category) => {
+          const percentage = total ? Math.round((category.count / total) * 100) : 0;
           return (
-            <div key={cat.name} className="space-y-2">
+            <div key={category.category} className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span>{cat.name}</span>
-                <span className="text-muted-foreground">{cat.value}%</span>
+                <span>{category.category}</span>
+                <span className="text-muted-foreground">{percentage}%</span>
               </div>
-              <div className="h-2 bg-muted rounded-full overflow-hidden">
-                <div
-                  className={`h-full ${colors[index]} rounded-full transition-all`}
-                  style={{ width: `${percentage}%` }}
-                />
+              <div className="h-2 overflow-hidden rounded-full bg-[#e8f2ee]">
+                <div className="h-full rounded-full bg-[#3f8f78]" style={{ width: `${percentage}%` }} />
               </div>
             </div>
           );
         })}
+        {!categories.length ? <p className="text-sm text-muted-foreground">No categories loaded.</p> : null}
       </CardContent>
     </Card>
   );

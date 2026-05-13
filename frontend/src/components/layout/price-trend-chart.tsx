@@ -1,53 +1,42 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { priceTrends } from "@/lib/data/mockData";
+import { ProductSummary } from "@/lib/api";
 
-export function PriceTrendChart() {
+type PriceTrendChartProps = {
+  products?: ProductSummary[];
+};
+
+function naira(value: number) {
+  return new Intl.NumberFormat("en-NG", {
+    style: "currency",
+    currency: "NGN",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+export function PriceTrendChart({ products = [] }: PriceTrendChartProps) {
+  const maxPrice = Math.max(...products.map((product) => product.avg_price), 1);
+
   return (
-    <Card className="col-span-2">
+    <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
       <CardHeader>
-        <CardTitle>Price Trends</CardTitle>
+        <CardTitle>Price Benchmark Snapshot</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-[300px] flex items-end justify-between gap-4 px-4">
-          {priceTrends.map((data) => (
-            <div key={data.month} className="flex flex-col items-center gap-2">
-              <div className="flex gap-1 items-end h-[200px]">
-                <div
-                  className="w-8 bg-primary/80 rounded-t"
-                  style={{ height: `${(data.cement / 16000) * 100}%` }}
-                  title={`Cement: ₦${data.cement.toLocaleString()}`}
-                />
-                <div
-                  className="w-8 bg-blue-500/80 rounded-t"
-                  style={{ height: `${(data.iphone / 700000) * 100}%` }}
-                  title={`iPhone: ₦${data.iphone.toLocaleString()}`}
-                />
-                <div
-                  className="w-8 bg-green-500/80 rounded-t"
-                  style={{ height: `${(data.generator / 190000) * 100}%` }}
-                  title={`Generator: ₦${data.generator.toLocaleString()}`}
-                />
-              </div>
-              <span className="text-xs text-muted-foreground">{data.month}</span>
+        <div className="flex h-[260px] items-end justify-between gap-4 px-2">
+          {products.slice(0, 8).map((product) => (
+            <div key={product.id} className="flex min-w-0 flex-1 flex-col items-center gap-2">
+              <div
+                className="w-full max-w-12 rounded-t-xl bg-[#3f8f78]"
+                style={{ height: `${Math.max((product.avg_price / maxPrice) * 100, 4)}%` }}
+                title={`${product.name}: ${naira(product.avg_price)}`}
+              />
+              <span className="w-full truncate text-center text-xs text-muted-foreground">{product.name}</span>
             </div>
           ))}
         </div>
-        <div className="flex items-center justify-center gap-6 mt-4">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-primary/80 rounded" />
-            <span className="text-xs text-muted-foreground">Cement (50kg)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-blue-500/80 rounded" />
-            <span className="text-xs text-muted-foreground">iPhone 13 Pro Max</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-green-500/80 rounded" />
-            <span className="text-xs text-muted-foreground">Gen 2.5KVA</span>
-          </div>
-        </div>
+        {!products.length ? <p className="text-sm text-muted-foreground">No product prices loaded.</p> : null}
       </CardContent>
     </Card>
   );
