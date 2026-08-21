@@ -214,6 +214,16 @@ class OpsOverview(BaseModel):
     recent_listings: list[OpsRecentListing]
 
 
+class JobMetrics(BaseModel):
+    queued: int
+    running: int
+    retrying: int
+    failed: int
+    cancelled: int
+    completed: int
+    oldest_queued_seconds: int
+
+
 class NormalizationResult(BaseModel):
     message: str
     linked_count: int

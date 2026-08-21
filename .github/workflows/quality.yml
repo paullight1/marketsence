@@ -33,6 +33,26 @@ jobs:
       - name: Run backend tests
         run: python -m pytest tests -q
 
+  backend-audit:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install audit tool
+        run: python -m pip install --upgrade pip pip-audit==2.10.1
+      - name: Audit backend dependencies
+        run: pip-audit -r requirements.txt
+
   migration:
     name: PostgreSQL migration smoke
     runs-on: ubuntu-latest
@@ -93,3 +113,23 @@ jobs:
         run: npm run lint
       - name: Build frontend
         run: npm run build
+
+  frontend-audit:
+    name: Production npm dependency audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high

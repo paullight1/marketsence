@@ -1,13 +1,47 @@
+from datetime import timezone
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import to_money
 from app.db.database import get_db
-from app.models.models import PriceHistory, RawListing, Supplier, SuspiciousListing
-from app.schemas import OpsOverview
+from app.models.models import Job, PriceHistory, RawListing, Supplier, SuspiciousListing, utc_now
+from app.schemas import JobMetrics, OpsOverview
 
 router = APIRouter()
+
+
+@router.get("/job-metrics", response_model=JobMetrics)
+async def get_job_metrics(db: AsyncSession = Depends(get_db)):
+    rows = (
+        await db.execute(
+            select(Job.status, func.count(Job.id)).group_by(Job.status)
+        )
+    ).all()
+    counts = {str(status): int(count or 0) for status, count in rows}
+    oldest = (
+        await db.execute(
+            select(func.min(Job.created_at)).where(Job.status.in_(("queued", "retrying")))
+        )
+    ).scalar()
+    oldest_seconds = 0
+    if oldest is not None:
+        now = utc_now()
+        if oldest.tzinfo is None:
+            now = now.replace(tzinfo=None)
+        else:
+            oldest = oldest.astimezone(timezone.utc)
+        oldest_seconds = max(0, int((now - oldest).total_seconds()))
+    return {
+        "queued": counts.get("queued", 0),
+        "running": counts.get("running", 0),
+        "retrying": counts.get("retrying", 0),
+        "failed": counts.get("failed", 0),
+        "cancelled": counts.get("cancelled", 0),
+        "completed": counts.get("completed", 0),
+        "oldest_queued_seconds": oldest_seconds,
+    }
 
 
 @router.get("/overview", response_model=OpsOverview)
@@ -20,26 +54,13 @@ async def get_ops_overview(db: AsyncSession = Depends(get_db)):
     suspicious_total = await _count(db, SuspiciousListing.id)
     suspicious_unreviewed = await _count_where(db, SuspiciousListing.id, SuspiciousListing.reviewed.is_(False))
 
-    recent_result = await db.execute(
-        select(RawListing, Supplier.name)
-        .join(Supplier, RawListing.seller_id == Supplier.id)
-        .order_by(RawListing.created_at.desc())
-        .limit(6)
-    )
+    recent_result = await db.execute(select(RawListing, Supplier.name).join(Supplier, RawListing.seller_id == Supplier.id).order_by(RawListing.created_at.desc()).limit(6))
     recent_listings = [
-        {
-            "id": listing.id,
-            "product_name": listing.original_name,
-            "price": to_money(listing.price),
-            "seller": seller_name,
-            "source": listing.source,
-            "location": listing.location,
-            "is_suspicious": bool(listing.is_suspicious),
-        }
+        {"id": listing.id, "product_name": listing.original_name, "price": to_money(listing.price), "seller": seller_name, "source": listing.source, "location": listing.location, "is_suspicious": bool(listing.is_suspicious)}
         for listing, seller_name in recent_result.all()
     ]
-
     review_alerts = await _review_alerts(db)
+
     if listing_count == 0:
         normalization_stage, normalization_eta = "Queued", "Waiting for listings"
     elif unlinked_count:
@@ -77,15 +98,7 @@ async def get_ops_overview(db: AsyncSession = Depends(get_db)):
 
 
 async def _review_alerts(db: AsyncSession) -> list[dict]:
-    flagged_rows = (
-        await db.execute(
-            select(SuspiciousListing, RawListing)
-            .join(RawListing, SuspiciousListing.listing_id == RawListing.id)
-            .where(SuspiciousListing.reviewed.is_(False))
-            .order_by(SuspiciousListing.created_at.desc())
-            .limit(4)
-        )
-    ).all()
+    flagged_rows = (await db.execute(select(SuspiciousListing, RawListing).join(RawListing, SuspiciousListing.listing_id == RawListing.id).where(SuspiciousListing.reviewed.is_(False)).order_by(SuspiciousListing.created_at.desc()).limit(4))).all()
     alerts = [
         {"id": f"suspicious-{flag.id}", "product": listing.original_name, "issue": flag.reason, "severity": str(flag.severity or "medium").title(), "delta": 0}
         for flag, listing in flagged_rows
@@ -97,10 +110,7 @@ async def _review_alerts(db: AsyncSession) -> list[dict]:
     if excluded_ids:
         unresolved_query = unresolved_query.where(RawListing.id.notin_(excluded_ids))
     unresolved_result = await db.execute(unresolved_query.limit(4 - len(alerts)))
-    alerts.extend(
-        {"id": f"unresolved-{listing.id}", "product": listing.original_name, "issue": "Product match unresolved", "severity": "Medium", "delta": 0}
-        for listing in unresolved_result.scalars().all()
-    )
+    alerts.extend({"id": f"unresolved-{listing.id}", "product": listing.original_name, "issue": "Product match unresolved", "severity": "Medium", "delta": 0} for listing in unresolved_result.scalars().all())
     return alerts
 
 

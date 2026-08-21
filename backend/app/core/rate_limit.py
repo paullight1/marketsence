@@ -39,17 +39,8 @@ class MemoryRateLimiter:
             self._counts[count_key] = current
             if len(self._counts) > 10_000:
                 minimum_bucket = bucket - 2
-                self._counts = {
-                    item_key: value
-                    for item_key, value in self._counts.items()
-                    if item_key[1] >= minimum_bucket
-                }
-        return RateLimitDecision(
-            allowed=current <= limit,
-            limit=limit,
-            remaining=max(limit - current, 0),
-            reset_after=max(reset_after, 1),
-        )
+                self._counts = {item_key: value for item_key, value in self._counts.items() if item_key[1] >= minimum_bucket}
+        return RateLimitDecision(allowed=current <= limit, limit=limit, remaining=max(limit - current, 0), reset_after=max(reset_after, 1))
 
 
 class RedisRateLimiter:
@@ -74,20 +65,10 @@ return {current, ttl}
     async def hit(self, key: str, limit: int, window_seconds: int = 60) -> RateLimitDecision:
         bucket = int(time.time()) // window_seconds
         redis_key = f"{key}:{bucket}"
-        current, ttl = await self._redis.eval(
-            self._SCRIPT,
-            1,
-            redis_key,
-            window_seconds,
-        )
+        current, ttl = await self._redis.eval(self._SCRIPT, 1, redis_key, window_seconds)
         current = int(current)
         ttl = max(int(ttl), 1)
-        return RateLimitDecision(
-            allowed=current <= limit,
-            limit=limit,
-            remaining=max(limit - current, 0),
-            reset_after=ttl,
-        )
+        return RateLimitDecision(allowed=current <= limit, limit=limit, remaining=max(limit - current, 0), reset_after=ttl)
 
 
 def build_rate_limiter():
@@ -98,36 +79,25 @@ def build_rate_limiter():
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
-        if (
-            not settings.rate_limit_enabled
-            or request.method == "OPTIONS"
-            or request.url.path in {"/", "/health"}
-        ):
+        if not settings.rate_limit_enabled or request.method == "OPTIONS" or request.url.path in {"/", "/health", "/ready"}:
             return await call_next(request)
 
         path = request.url.path
         if path == "/api/auth/login":
-            category = "login"
-            limit = settings.auth_login_limit_per_minute
+            category, limit = "login", settings.auth_login_limit_per_minute
         elif request.method in {"GET", "HEAD"}:
-            category = "read"
-            limit = settings.read_limit_per_minute
+            category, limit = "read", settings.read_limit_per_minute
         else:
-            category = "write"
-            limit = settings.write_limit_per_minute
+            category, limit = "write", settings.write_limit_per_minute
 
         client_host = request.client.host if request.client else "unknown"
         key = f"marketsense:rate:{settings.environment}:{category}:{client_host}"
         limiter = request.app.state.rate_limiter
-
         try:
             decision = await limiter.hit(key, limit, 60)
         except Exception:
             if settings.environment == "production":
-                return JSONResponse(
-                    status_code=503,
-                    content={"detail": "Distributed rate limiter unavailable"},
-                )
+                return JSONResponse(status_code=503, content={"detail": "Distributed rate limiter unavailable"})
             return await call_next(request)
 
         headers = {
@@ -136,11 +106,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "X-RateLimit-Reset": str(int(time.time()) + decision.reset_after),
         }
         if not decision.allowed:
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Rate limit exceeded"},
-                headers={**headers, "Retry-After": str(decision.reset_after)},
-            )
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"}, headers={**headers, "Retry-After": str(decision.reset_after)})
 
         response = await call_next(request)
         for header, value in headers.items():
