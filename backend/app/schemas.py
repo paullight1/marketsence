@@ -1,6 +1,17 @@
 from datetime import datetime
+from decimal import Decimal
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer
+
+from app.core.money import ZERO_MONEY, to_money
+
+
+Money = Annotated[
+    Decimal,
+    BeforeValidator(to_money),
+    PlainSerializer(lambda value: float(value), return_type=float, when_used="json"),
+]
 
 
 class ProductSummary(BaseModel):
@@ -8,9 +19,9 @@ class ProductSummary(BaseModel):
     name: str
     category: str | None = None
     brand: str | None = None
-    avg_price: float = 0
-    min_price: float = 0
-    max_price: float = 0
+    avg_price: Money = ZERO_MONEY
+    min_price: Money = ZERO_MONEY
+    max_price: Money = ZERO_MONEY
     listings_count: int = 0
     last_updated: datetime | None = None
 
@@ -35,7 +46,7 @@ class SupplierSummary(BaseModel):
     location: str | None = None
     trust_score: float
     total_listings: int
-    avg_price: float = 0
+    avg_price: Money = ZERO_MONEY
     suspicious_count: int = 0
 
 
@@ -53,7 +64,7 @@ class SupplierDetail(BaseModel):
 class SupplierListingItem(BaseModel):
     id: int
     product_name: str
-    price: float
+    price: Money
     source: str
     location: str | None = None
     date: datetime | None = None
@@ -63,23 +74,23 @@ class SupplierListingItem(BaseModel):
 class MarketSnapshot(BaseModel):
     product_id: int
     product_name: str
-    average_price: float
-    market_range: list[float]
+    average_price: Money
+    market_range: list[Money]
     total_listings: int
     suspicious_listings: int
 
 
 class SourceComparison(BaseModel):
     source: str
-    avg_price: float
-    min_price: float
-    max_price: float
+    avg_price: Money
+    min_price: Money
+    max_price: Money
     listings_count: int
 
 
 class TrendPoint(BaseModel):
     date: str
-    avg_price: float
+    avg_price: Money
 
 
 class DashboardSummary(BaseModel):
@@ -104,7 +115,7 @@ class SuspiciousSummary(BaseModel):
 class ListingInput(BaseModel):
     source: str = Field(min_length=2, max_length=50)
     original_name: str = Field(min_length=3, max_length=255)
-    price: float = Field(gt=0)
+    price: Money = Field(gt=0)
     seller_name: str = Field(min_length=2, max_length=255)
     seller_source: str = Field(min_length=2, max_length=50)
     location: str | None = Field(default=None, max_length=100)
@@ -130,16 +141,8 @@ class ScrapeRequest(BaseModel):
     ingest: bool = True
     context_keywords: list[str] = Field(
         default_factory=lambda: [
-            "price",
-            "market",
-            "shop",
-            "store",
-            "supplier",
-            "wholesale",
-            "retail",
-            "product",
-            "nigeria",
-            "naira",
+            "price", "market", "shop", "store", "supplier", "wholesale",
+            "retail", "product", "nigeria", "naira",
         ],
         max_length=25,
     )
@@ -148,7 +151,7 @@ class ScrapeRequest(BaseModel):
 class ScrapedListingPreview(BaseModel):
     source: str
     original_name: str
-    price: float
+    price: Money
     seller_name: str
     seller_source: str
     location: str | None = None
@@ -207,7 +210,7 @@ class OpsReviewAlert(BaseModel):
 class OpsRecentListing(BaseModel):
     id: int
     product_name: str
-    price: float
+    price: Money
     seller: str
     source: str
     location: str | None = None

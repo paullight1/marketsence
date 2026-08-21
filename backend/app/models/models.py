@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
+from app.core.money import MONEY_PRECISION, MONEY_SCALE
 from app.db.database import Base
 
 
@@ -45,7 +46,7 @@ class RawListing(Base):
     id = Column(Integer, primary_key=True, index=True)
     source = Column(String(50), nullable=False)
     original_name = Column(String(255), nullable=False)
-    price = Column(Float, nullable=False)
+    price = Column(Numeric(MONEY_PRECISION, MONEY_SCALE), nullable=False)
     seller_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
     location = Column(String(100), nullable=True)
     url = Column(String(500), nullable=True)
@@ -63,7 +64,7 @@ class PriceHistory(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    price = Column(Float, nullable=False)
+    price = Column(Numeric(MONEY_PRECISION, MONEY_SCALE), nullable=False)
     recorded_at = Column(DateTime, default=utc_now)
     source = Column(String(50), nullable=True)
 
