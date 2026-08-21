@@ -1,6 +1,6 @@
-import logging
+from collections import defaultdict
+from statistics import median
 
-import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,66 +13,91 @@ from app.models.models import (
     SuspiciousListing,
 )
 
-logger = logging.getLogger(__name__)
 
-
-async def calculate_market_benchmarks(db: AsyncSession):
-    """Calculate one trust-weighted benchmark price for each linked product."""
+async def calculate_market_benchmarks(db: AsyncSession) -> int:
+    """Persist trust-weighted product benchmarks and explicit outlier review records."""
     result = await db.execute(
         select(RawListing, Supplier.trust_score)
         .join(Supplier, RawListing.seller_id == Supplier.id)
         .where(RawListing.product_id.is_not(None))
     )
-    data = []
-    for row, trust in result:
-        data.append(
-            {
-                "product_id": row.product_id,
-                "price": row.price,
-                "trust_score": trust if trust is not None else 50.0,
-            }
-        )
-
-    if not data:
+    rows = result.all()
+    if not rows:
         return 0
 
-    df = pd.DataFrame(data)
+    grouped: dict[int, list[tuple[RawListing, float]]] = defaultdict(list)
+    listing_ids: list[int] = []
+    for listing, trust_score in rows:
+        grouped[int(listing.product_id)].append(
+            (listing, float(trust_score if trust_score is not None else 50.0))
+        )
+        listing_ids.append(int(listing.id))
 
-    def remove_outliers(group):
-        if len(group) < 3:
-            return group
-        mean = group["price"].mean()
-        std = group["price"].std()
-        if pd.isna(std) or std == 0:
-            return group
-        return group[
-            (group["price"] >= mean - 2 * std)
-            & (group["price"] <= mean + 2 * std)
-        ]
-
-    df = (
-        df.groupby("product_id", group_keys=False)
-        .apply(remove_outliers, include_groups=False)
-        .reset_index(drop=False)
+    existing_result = await db.execute(
+        select(SuspiciousListing).where(
+            SuspiciousListing.listing_id.in_(listing_ids)
+        )
     )
-
-    def weighted_mean(group):
-        weights = group["trust_score"].clip(lower=0)
-        total_weight = weights.sum()
-        if total_weight <= 0:
-            return group["price"].mean()
-        return (group["price"] * weights).sum() / total_weight
-
-    benchmarks = df.groupby("product_id").apply(
-        weighted_mean, include_groups=False
-    )
+    existing_flags: dict[int, SuspiciousListing] = {}
+    for flag in existing_result.scalars().all():
+        existing_flags.setdefault(int(flag.listing_id), flag)
 
     updated_count = 0
-    for product_id, golden_price in benchmarks.items():
+    for product_id, observations in grouped.items():
+        flagged_ids = _detect_outlier_listing_ids(observations)
+
+        for listing, _ in observations:
+            if listing.id not in flagged_ids:
+                continue
+
+            listing.is_suspicious = True
+            center = median(float(item.price) for item, _ in observations)
+            relative_delta = abs(float(listing.price) - center) / center if center else 0
+            direction = "above" if float(listing.price) >= center else "below"
+            reason = (
+                "Benchmark outlier: price is "
+                f"{relative_delta * 100:.1f}% {direction} product median {center:.2f}"
+            )
+            severity = "high" if relative_delta >= 1.0 else "medium"
+
+            existing = existing_flags.get(int(listing.id))
+            if existing is None:
+                flag = SuspiciousListing(
+                    listing_id=listing.id,
+                    reason=reason,
+                    severity=severity,
+                    reviewed=False,
+                )
+                db.add(flag)
+                existing_flags[int(listing.id)] = flag
+            elif not existing.reviewed and existing.reason.startswith("Benchmark outlier:"):
+                existing.reason = reason
+                existing.severity = severity
+
+        benchmark_rows = [
+            observation
+            for observation in observations
+            if observation[0].id not in flagged_ids
+        ] or observations
+
+        weighted_total = 0.0
+        total_weight = 0.0
+        for listing, trust_score in benchmark_rows:
+            weight = max(float(trust_score), 0.0)
+            weighted_total += float(listing.price) * weight
+            total_weight += weight
+
+        if total_weight > 0:
+            benchmark_price = weighted_total / total_weight
+        else:
+            benchmark_price = sum(
+                float(listing.price) for listing, _ in benchmark_rows
+            ) / len(benchmark_rows)
+
         db.add(
             PriceHistory(
-                product_id=int(product_id),
-                price=float(golden_price),
+                product_id=product_id,
+                price=benchmark_price,
                 source="System Benchmark",
             )
         )
@@ -80,6 +105,32 @@ async def calculate_market_benchmarks(db: AsyncSession):
 
     await db.commit()
     return updated_count
+
+
+def _detect_outlier_listing_ids(
+    observations: list[tuple[RawListing, float]],
+) -> set[int]:
+    if len(observations) < 4:
+        return set()
+
+    prices = [float(listing.price) for listing, _ in observations]
+    center = median(prices)
+    deviations = [abs(price - center) for price in prices]
+    mad = median(deviations)
+
+    flagged: set[int] = set()
+    for (listing, _), deviation in zip(observations, deviations, strict=True):
+        if mad > 0:
+            modified_z = 0.6745 * deviation / mad
+            is_outlier = modified_z > 3.5
+        else:
+            relative_delta = deviation / center if center else 0
+            is_outlier = relative_delta >= 0.5
+
+        if is_outlier:
+            flagged.add(int(listing.id))
+
+    return flagged
 
 
 async def get_dashboard_summary(db: AsyncSession) -> dict:
