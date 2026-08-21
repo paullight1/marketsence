@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,46 +21,66 @@ async def list_products(
     limit: int = 50,
     offset: int = 0,
 ) -> list[ProductSummary]:
-    query = select(Product).options(selectinload(Product.category)).order_by(Product.id)
+    stats = (
+        select(
+            RawListing.product_id.label("product_id"),
+            func.avg(RawListing.price).label("avg_price"),
+            func.min(RawListing.price).label("min_price"),
+            func.max(RawListing.price).label("max_price"),
+            func.count(RawListing.id).label("listings_count"),
+        )
+        .where(RawListing.product_id.is_not(None))
+        .group_by(RawListing.product_id)
+        .subquery()
+    )
+
+    query = (
+        select(
+            Product,
+            Category.name.label("category_name"),
+            stats.c.avg_price,
+            stats.c.min_price,
+            stats.c.max_price,
+            stats.c.listings_count,
+        )
+        .outerjoin(Category, Product.category_id == Category.id)
+        .outerjoin(stats, stats.c.product_id == Product.id)
+        .order_by(Product.id)
+    )
     if search:
         query = query.where(Product.normalized_name.ilike(f"%{search}%"))
     if category:
-        query = query.join(Category).where(Category.name == category)
+        query = query.where(Category.name == category)
 
     result = await db.execute(query.offset(offset).limit(limit))
-    products = result.scalars().all()
-
-    items: list[ProductSummary] = []
-    for product in products:
-        stats_result = await db.execute(
-            select(
-                func.avg(RawListing.price),
-                func.min(RawListing.price),
-                func.max(RawListing.price),
-                func.count(RawListing.id),
-            ).where(RawListing.product_id == product.id)
+    return [
+        ProductSummary(
+            id=product.id,
+            name=product.normalized_name,
+            category=category_name,
+            brand=product.brand,
+            avg_price=float(avg_price or 0),
+            min_price=float(min_price or 0),
+            max_price=float(max_price or 0),
+            listings_count=int(listings_count or 0),
+            last_updated=product.updated_at,
         )
-        avg_price, min_price, max_price, count = stats_result.one()
-        items.append(
-            ProductSummary(
-                id=product.id,
-                name=product.normalized_name,
-                category=product.category.name if product.category else None,
-                brand=product.brand,
-                avg_price=float(avg_price or 0),
-                min_price=float(min_price or 0),
-                max_price=float(max_price or 0),
-                listings_count=int(count or 0),
-                last_updated=product.updated_at,
-            )
-        )
-
-    return items
+        for (
+            product,
+            category_name,
+            avg_price,
+            min_price,
+            max_price,
+            listings_count,
+        ) in result.all()
+    ]
 
 
 async def get_product(db: AsyncSession, product_id: int) -> ProductDetail | None:
     result = await db.execute(
-        select(Product).options(selectinload(Product.category)).where(Product.id == product_id)
+        select(Product)
+        .options(selectinload(Product.category))
+        .where(Product.id == product_id)
     )
     product = result.scalar_one_or_none()
     if not product:
@@ -75,14 +95,19 @@ async def get_product(db: AsyncSession, product_id: int) -> ProductDetail | None
     )
 
 
-async def search_products(db: AsyncSession, query_text: str, limit: int = 10) -> list[ProductSearchResult]:
+async def search_products(
+    db: AsyncSession, query_text: str, limit: int = 10
+) -> list[ProductSearchResult]:
     result = await db.execute(
         select(Product)
         .where(Product.normalized_name.ilike(f"%{query_text}%"))
         .order_by(Product.normalized_name)
         .limit(limit)
     )
-    return [ProductSearchResult(id=product.id, name=product.normalized_name) for product in result.scalars()]
+    return [
+        ProductSearchResult(id=product.id, name=product.normalized_name)
+        for product in result.scalars()
+    ]
 
 
 async def list_suppliers(
@@ -93,40 +118,46 @@ async def list_suppliers(
     limit: int = 50,
     offset: int = 0,
 ) -> list[SupplierSummary]:
-    query = select(Supplier).order_by(Supplier.id)
+    stats = (
+        select(
+            RawListing.seller_id.label("seller_id"),
+            func.avg(RawListing.price).label("avg_price"),
+            func.sum(
+                case((RawListing.is_suspicious.is_(True), 1), else_=0)
+            ).label("suspicious_count"),
+        )
+        .group_by(RawListing.seller_id)
+        .subquery()
+    )
+
+    query = (
+        select(
+            Supplier,
+            stats.c.avg_price,
+            stats.c.suspicious_count,
+        )
+        .outerjoin(stats, stats.c.seller_id == Supplier.id)
+        .order_by(Supplier.id)
+    )
     if source and source != "all":
         query = query.where(Supplier.source == source)
     if search:
         query = query.where(Supplier.name.ilike(f"%{search}%"))
 
     result = await db.execute(query.offset(offset).limit(limit))
-    suppliers = result.scalars().all()
-
-    items: list[SupplierSummary] = []
-    for supplier in suppliers:
-        avg_price_result = await db.execute(
-            select(func.avg(RawListing.price)).where(RawListing.seller_id == supplier.id)
+    return [
+        SupplierSummary(
+            id=supplier.id,
+            name=supplier.name,
+            source=supplier.source,
+            location=supplier.location,
+            trust_score=float(supplier.trust_score),
+            total_listings=int(supplier.total_listings or 0),
+            avg_price=float(avg_price or 0),
+            suspicious_count=int(suspicious_count or 0),
         )
-        suspicious_result = await db.execute(
-            select(func.count(RawListing.id)).where(
-                RawListing.seller_id == supplier.id,
-                RawListing.is_suspicious.is_(True),
-            )
-        )
-        items.append(
-            SupplierSummary(
-                id=supplier.id,
-                name=supplier.name,
-                source=supplier.source,
-                location=supplier.location,
-                trust_score=float(supplier.trust_score),
-                total_listings=supplier.total_listings,
-                avg_price=float(avg_price_result.scalar() or 0),
-                suspicious_count=int(suspicious_result.scalar() or 0),
-            )
-        )
-
-    return items
+        for supplier, avg_price, suspicious_count in result.all()
+    ]
 
 
 async def get_supplier(db: AsyncSession, supplier_id: int) -> SupplierDetail | None:
@@ -142,7 +173,7 @@ async def get_supplier(db: AsyncSession, supplier_id: int) -> SupplierDetail | N
         location=supplier.location,
         contact_info=supplier.contact_info,
         trust_score=float(supplier.trust_score),
-        total_listings=supplier.total_listings,
+        total_listings=int(supplier.total_listings or 0),
         successful_transactions=supplier.successful_transactions,
     )
 
