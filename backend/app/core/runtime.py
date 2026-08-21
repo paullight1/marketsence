@@ -1,4 +1,26 @@
+import re
+
 from app.core.config import settings
+
+
+_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}\.?$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?$",
+    re.IGNORECASE,
+)
+
+
+def _normalized_hostname(value: str) -> str | None:
+    hostname = value.strip().rstrip(".").lower()
+    if not hostname or not _HOSTNAME_RE.fullmatch(hostname):
+        return None
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return None
+    return hostname
+
+
+def _domain_is_within(domain: str, allowed_domains: set[str]) -> bool:
+    return any(domain == allowed or domain.endswith(f".{allowed}") for allowed in allowed_domains)
 
 
 def validate_runtime_configuration() -> None:
@@ -27,6 +49,38 @@ def validate_runtime_configuration() -> None:
             errors.append("Production cleaned exports require private S3-compatible object storage")
         if not settings.s3_bucket:
             errors.append("S3_BUCKET is required for private S3-compatible export storage")
+
+        if not settings.scrape_allowed_domains:
+            errors.append("SCRAPE_ALLOWED_DOMAINS must contain at least one approved hostname in production")
+        normalized_allowed: set[str] = set()
+        invalid_allowed: list[str] = []
+        for entry in settings.scrape_allowed_domains:
+            hostname = _normalized_hostname(entry)
+            if hostname is None:
+                invalid_allowed.append(entry)
+            else:
+                normalized_allowed.add(hostname)
+        if invalid_allowed:
+            errors.append(
+                "SCRAPE_ALLOWED_DOMAINS entries must be bare hostnames without schemes, paths, ports, or wildcards: "
+                + ", ".join(invalid_allowed)
+            )
+
+        if settings.browser_scraper_enabled:
+            if not settings.browser_scrape_allowed_domains:
+                errors.append("BROWSER_SCRAPE_ALLOWED_DOMAINS must be non-empty when browser scraping is enabled")
+            for entry in settings.browser_scrape_allowed_domains:
+                hostname = _normalized_hostname(entry)
+                if hostname is None:
+                    errors.append(
+                        "BROWSER_SCRAPE_ALLOWED_DOMAINS entries must be bare hostnames without schemes, paths, ports, or wildcards"
+                    )
+                    continue
+                if normalized_allowed and not _domain_is_within(hostname, normalized_allowed):
+                    errors.append(
+                        "BROWSER_SCRAPE_ALLOWED_DOMAINS must stay within SCRAPE_ALLOWED_DOMAINS"
+                    )
+                    break
 
     if errors:
         raise RuntimeError("Invalid MarketSense runtime configuration: " + "; ".join(errors))

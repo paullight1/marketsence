@@ -1,0 +1,73 @@
+# Production egress policy for MarketSense API and worker pods.
+#
+# Required pod labels:
+#   app.kubernetes.io/name: marketsense
+# Required PostgreSQL/Redis pod labels when those services run inside the cluster:
+#   app.kubernetes.io/part-of: marketsense
+#
+# This policy intentionally blocks private, loopback, link-local, metadata,
+# benchmarking, multicast, documentation and reserved IPv4 destinations from
+# generic web egress. Add explicit service/CIDR rules for approved private
+# managed PostgreSQL/Redis/S3 endpoints in your environment rather than
+# widening the public-web rule below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: marketsense-restricted-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: marketsense
+  policyTypes:
+    - Egress
+  egress:
+    # Cluster DNS. Adjust the namespace/pod labels if your DNS deployment differs.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Approved in-cluster MarketSense dependencies only.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: marketsense
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+
+    # Public HTTP(S) scraping and S3-compatible HTTPS endpoints. Private and
+    # metadata ranges remain unreachable even if application SSRF validation regresses.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
