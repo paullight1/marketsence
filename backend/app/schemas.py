@@ -6,12 +6,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSeriali
 
 from app.core.money import ZERO_MONEY, to_money
 
-
-Money = Annotated[
-    Decimal,
-    BeforeValidator(to_money),
-    PlainSerializer(lambda value: float(value), return_type=float, when_used="json"),
-]
+Money = Annotated[Decimal, BeforeValidator(to_money), PlainSerializer(lambda value: float(value), return_type=float, when_used="json")]
 
 
 class ProductSummary(BaseModel):
@@ -118,6 +113,7 @@ class ListingInput(BaseModel):
     price: Money = Field(gt=0)
     seller_name: str = Field(min_length=2, max_length=255)
     seller_source: str = Field(min_length=2, max_length=50)
+    external_id: str | None = Field(default=None, min_length=1, max_length=255)
     location: str | None = Field(default=None, max_length=100)
     url: str | None = Field(default=None, max_length=500)
 
@@ -139,13 +135,7 @@ class ScrapeRequest(BaseModel):
     location: str | None = Field(default=None, max_length=100)
     max_items: int = Field(default=25, ge=1, le=100)
     ingest: bool = True
-    context_keywords: list[str] = Field(
-        default_factory=lambda: [
-            "price", "market", "shop", "store", "supplier", "wholesale",
-            "retail", "product", "nigeria", "naira",
-        ],
-        max_length=25,
-    )
+    context_keywords: list[str] = Field(default_factory=lambda: ["price", "market", "shop", "store", "supplier", "wholesale", "retail", "product", "nigeria", "naira"], max_length=25)
 
 
 class ScrapedListingPreview(BaseModel):

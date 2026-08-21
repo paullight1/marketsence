@@ -1,5 +1,7 @@
+from typing import Annotated
+
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,23 +19,18 @@ router = APIRouter()
 
 def _require_sync_pipeline(operation: str, job_path: str) -> None:
     if settings.environment == "production" and settings.background_jobs_enabled:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Synchronous {operation} is disabled in production; use {job_path}",
-        )
+        raise HTTPException(status_code=409, detail=f"Synchronous {operation} is disabled in production; use {job_path}")
 
 
 @router.post("/listings", response_model=IngestResult)
-async def ingest_listings(data: BulkListingsInput, db: AsyncSession = Depends(get_db)):
+async def ingest_listings(
+    data: BulkListingsInput,
+    db: AsyncSession = Depends(get_db),
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=255)] = None,
+):
     if len(data.listings) > settings.sync_ingest_max_listings:
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                f"Synchronous imports are limited to {settings.sync_ingest_max_listings} listings; "
-                "use /api/jobs/ingest for durable imports"
-            ),
-        )
-    added_count = await ingest_listings_service(db, data)
+        raise HTTPException(status_code=413, detail=f"Synchronous imports are limited to {settings.sync_ingest_max_listings} listings; use /api/jobs/ingest for durable imports")
+    added_count = await ingest_listings_service(db, data, request_key=idempotency_key)
     return {"added": added_count, "message": "Listings ingested successfully"}
 
 
@@ -47,16 +44,10 @@ async def scrape_website_listings(data: ScrapeRequest, db: AsyncSession = Depend
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=400, detail=f"Could not scrape website: {exc}") from exc
-
     ingested_count = 0
     if data.ingest and listings:
         ingested_count = await ingest_listings_service(db, BulkListingsInput(listings=listings))
-    return {
-        "scraped": len(listings),
-        "ingested": ingested_count,
-        "listings": listings,
-        "message": "Website scraped and listings ingested" if ingested_count else "Website scraped; no listings were ingested",
-    }
+    return {"scraped": len(listings), "ingested": ingested_count, "listings": listings, "message": "Website scraped and listings ingested" if ingested_count else "Website scraped; no listings were ingested"}
 
 
 @router.post("/clean-csv", response_model=CleanCsvResult)

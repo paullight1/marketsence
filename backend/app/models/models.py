@@ -42,6 +42,9 @@ class Product(Base):
 
 class RawListing(Base):
     __tablename__ = "raw_listings"
+    __table_args__ = (
+        UniqueConstraint("ingestion_key", name="uq_raw_listings_ingestion_key"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     source = Column(String(50), nullable=False)
@@ -50,6 +53,7 @@ class RawListing(Base):
     seller_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
     location = Column(String(100), nullable=True)
     url = Column(String(500), nullable=True)
+    ingestion_key = Column(String(64), nullable=True)
     raw_data = Column(JSON, nullable=True)
     is_suspicious = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utc_now)
@@ -73,6 +77,9 @@ class PriceHistory(Base):
 
 class Supplier(Base):
     __tablename__ = "suppliers"
+    __table_args__ = (
+        UniqueConstraint("name", "source", name="uq_suppliers_name_source"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
