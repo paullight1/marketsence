@@ -85,7 +85,8 @@ def test_dependency_and_update_automation_is_required_in_repo():
 
     assert "pip-audit==2.10.1" in workflow
     assert "pip-audit -r requirements.txt" in workflow
-    assert "npm audit --omit=dev --audit-level=high" in workflow
+    assert "npm audit --audit-level=high" in workflow
+    assert "npm audit --omit=dev --audit-level=high" not in workflow
     assert 'package-ecosystem: "pip"' in dependabot
     assert 'package-ecosystem: "npm"' in dependabot
     assert 'package-ecosystem: "github-actions"' in dependabot
