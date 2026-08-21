@@ -1,110 +1,52 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock3, ListChecks, SearchCode } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, CheckCircle2, Clock3, ListChecks, Loader2, Play } from "lucide-react";
 import { WorkspaceShell } from "@/components/layout/workspace-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { OpsOverview, OpsTask, fetchJson } from "@/lib/api";
+import { JobRecord, OpsOverview, fetchJson } from "@/lib/api";
 
-const columns = ["Blocked", "Queued", "Review", "Completed"] as const;
-
-function tasksForStage(tasks: OpsTask[], stage: string) {
-  return tasks.filter((task) => task.stage === stage);
-}
+const jobTone: Record<string, string> = { completed: "text-[#166534]", failed: "text-[#c2413a]", cancelled: "text-[#6b7280]", running: "text-[#2563eb]", retrying: "text-[#b45309]", queued: "text-[#173b39]" };
 
 export default function TasksPage() {
   const [ops, setOps] = useState<OpsOverview | null>(null);
+  const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [error, setError] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [reloadToken, setReloadToken] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [action, setAction] = useState("");
 
-  useEffect(() => {
-    async function loadOps() {
-      setIsLoading(true);
-      setError("");
-      try {
-        setOps(await fetchJson<OpsOverview>("/api/ops/overview"));
-      } catch (caught) {
-        setOps(null);
-        setError(caught instanceof Error ? caught.message : "Could not load task data");
-      } finally {
-        setIsLoading(false);
-      }
-    }
+  const load = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      const [opsData, jobData] = await Promise.all([fetchJson<OpsOverview>("/api/ops/overview"), fetchJson<JobRecord[]>("/api/jobs/?limit=50")]);
+      setOps(opsData); setJobs(jobData);
+    } catch (caught) { setOps(null); setJobs([]); setError(caught instanceof Error ? caught.message : "Could not load job data"); }
+    finally { setLoading(false); }
+  }, []);
 
-    loadOps();
-  }, [reloadToken]);
+  useEffect(() => { void load(); }, [load]);
 
-  const tasks = ops?.tasks ?? [];
+  async function queue(kind: "normalize" | "benchmark") {
+    setAction(kind); setError("");
+    try { await fetchJson<JobRecord>(`/api/jobs/${kind}`, { method: "POST", headers: { "Idempotency-Key": `${kind}-${new Date().toISOString().slice(0, 16)}` } }); await load(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : `Could not queue ${kind}`); }
+    finally { setAction(""); }
+  }
 
-  return (
-    <WorkspaceShell>
-      <section className="page-enter flex flex-col gap-2">
-        <span className="metric-pill w-fit">Persisted pipeline state</span>
-        <h1 className="text-4xl font-semibold tracking-tight text-[#173b39]">Task and review workspace</h1>
-        <p className="max-w-3xl text-sm text-[#48655d]">This board derives stage labels from persisted counts and benchmark history. It is not a background-job queue.</p>
-      </section>
+  async function cancel(jobId: string) {
+    setAction(jobId); try { await fetchJson<JobRecord>(`/api/jobs/${jobId}/cancel`, { method: "POST" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not cancel job"); } finally { setAction(""); }
+  }
 
-      {isLoading ? (
-        <StateCard title="Loading pipeline state" body="Reading persisted pipeline and review counts." />
-      ) : error || !ops ? (
-        <StateCard title="Pipeline state unavailable" body={error || "No operations state was returned."} error action={<Button variant="outline" onClick={() => setReloadToken((value) => value + 1)}>Retry</Button>} />
-      ) : (
-        <>
-          <section className="page-enter grid gap-4 md:grid-cols-4">
-            {ops.queue_metrics.map((metric) => (
-              <Card key={metric.label} className="rounded-2xl border-[#dce8e3] bg-white shadow-none"><CardContent className="p-5"><p className="text-sm text-muted-foreground">{metric.label}</p><p className={`mt-2 text-3xl font-semibold ${metric.tone === "warning" ? "text-[#b45309]" : "text-[#173b39]"}`}>{metric.value}</p></CardContent></Card>
-            ))}
-          </section>
-
-          <section className="page-enter grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-            <div className="grid gap-4 xl:grid-cols-4">
-              {columns.map((column) => (
-                <Card key={column} className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
-                  <CardHeader><CardTitle className="text-base">{column}</CardTitle></CardHeader>
-                  <CardContent className="space-y-3">
-                    {tasksForStage(tasks, column).map((task) => (
-                      <div key={task.id} className="rounded-xl border border-[#dce8e3] bg-[#fbfefd] p-4">
-                        <p className="font-semibold">{task.title}</p><p className="mt-1 text-sm text-muted-foreground">{task.owner}</p><p className="mt-3 text-sm text-[#48655d]">{task.note}</p>
-                        <div className="mt-4 h-2 rounded-full bg-[#e8f2ee]"><div className="h-2 rounded-full bg-[#3f8f78]" style={{ width: `${task.progress}%` }} /></div>
-                        <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground"><span>{task.source}</span><span>{task.eta}</span></div>
-                      </div>
-                    ))}
-                    {!tasksForStage(tasks, column).length ? <p className="rounded-xl border border-dashed border-[#dce8e3] bg-[#fbfefd] p-4 text-sm text-muted-foreground">No pipeline stage is in this state.</p> : null}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-
-            <div className="grid gap-6">
-              <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
-                <CardHeader><CardTitle className="text-base">Current execution contract</CardTitle></CardHeader>
-                <CardContent className="space-y-4 text-sm text-[#48655d]">
-                  <div className="flex items-start gap-3"><SearchCode className="mt-0.5 size-4 text-[#3f8f78]" /><span>Raw listing ingestion persists observations before normalization and benchmarking.</span></div>
-                  <div className="flex items-start gap-3"><Clock3 className="mt-0.5 size-4 text-[#3f8f78]" /><span>Unresolved product matches remain visible instead of being counted as completed work.</span></div>
-                  <div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 size-4 text-[#b45309]" /><span>Benchmarking is blocked until listings are linked to canonical products.</span></div>
-                  <div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 size-4 text-[#3f8f78]" /><span>Detected benchmark outliers create explicit analyst-review records.</span></div>
-                </CardContent>
-              </Card>
-
-              <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
-                <CardHeader className="flex flex-row items-center justify-between"><CardTitle className="text-base">Review feed</CardTitle><ListChecks className="size-4 text-muted-foreground" /></CardHeader>
-                <CardContent className="space-y-3">
-                  {ops.review_alerts.map((alert) => (
-                    <div key={alert.id} className="rounded-xl border border-[#dce8e3] bg-[#fbfefd] p-4"><p className="font-semibold">{alert.product}</p><p className="mt-1 text-sm text-muted-foreground">{alert.issue}</p><p className="mt-3 text-sm font-medium text-[#c2413a]">{alert.severity}</p></div>
-                  ))}
-                  {!ops.review_alerts.length ? <p className="rounded-xl border border-dashed border-[#dce8e3] bg-[#fbfefd] p-4 text-sm text-muted-foreground">No review records are waiting.</p> : null}
-                </CardContent>
-              </Card>
-            </div>
-          </section>
-        </>
-      )}
-    </WorkspaceShell>
-  );
+  return <WorkspaceShell>
+    <section className="page-enter flex flex-wrap items-end justify-between gap-4"><div><span className="metric-pill">Durable worker queue</span><h1 className="mt-3 text-4xl font-semibold text-[#173b39]">Jobs and review workspace</h1><p className="mt-2 max-w-3xl text-sm text-[#48655d]">Long-running scrape, normalization, benchmark, and large-import operations are persisted before a worker executes them.</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => queue("normalize")} disabled={Boolean(action)}>{action === "normalize" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />} Normalize</Button><Button onClick={() => queue("benchmark")} disabled={Boolean(action)} className="bg-[#173b39] text-white">{action === "benchmark" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />} Benchmark</Button></div></section>
+    {error ? <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
+    {loading ? <State icon={<Clock3 className="size-5" />} title="Loading durable jobs" body="Reading job and pipeline state." /> : <>
+      <section className="grid gap-4 md:grid-cols-4">{(ops?.queue_metrics ?? []).map((metric) => <Card key={metric.label} className="rounded-2xl border-[#dce8e3] bg-white shadow-none"><CardContent className="p-5"><p className="text-sm text-muted-foreground">{metric.label}</p><p className="mt-2 text-3xl font-semibold text-[#173b39]">{metric.value}</p></CardContent></Card>)}</section>
+      <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none"><CardHeader><CardTitle className="flex items-center gap-2"><ListChecks className="size-5" />Durable jobs</CardTitle></CardHeader><CardContent className="space-y-3">{jobs.map((job) => <div key={job.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#dce8e3] bg-[#fbfefd] p-4"><div><p className="font-semibold capitalize">{job.job_type}</p><p className="text-xs text-muted-foreground">{job.id}</p><p className={`mt-1 text-sm font-medium ${jobTone[job.status] || ""}`}>{job.status} · attempt {job.attempts}/{job.max_attempts}</p>{job.error ? <p className="mt-1 max-w-2xl text-xs text-red-700">{job.error}</p> : null}</div>{["queued", "retrying", "running"].includes(job.status) ? <Button variant="outline" disabled={action === job.id} onClick={() => cancel(job.id)}>Cancel</Button> : null}</div>)}{!jobs.length ? <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">No durable jobs have been queued.</p> : null}</CardContent></Card>
+      <section className="grid gap-6 lg:grid-cols-2"><State icon={<AlertTriangle className="size-5 text-[#b45309]" />} title="Retry and lease safety" body="Failed attempts back off; stale worker leases are recovered so abandoned work does not disappear." /><State icon={<CheckCircle2 className="size-5 text-[#166534]" />} title="Review remains separate" body="Durable execution does not auto-approve suspicious prices or unresolved catalog matches." /></section>
+    </>}
+  </WorkspaceShell>;
 }
 
-function StateCard({ title, body, action, error = false }: { title: string; body: string; action?: React.ReactNode; error?: boolean }) {
-  return <Card className={`page-enter rounded-2xl shadow-none ${error ? "border-red-200 bg-red-50" : "border-[#dce8e3] bg-white"}`}><CardContent className="flex flex-wrap items-center justify-between gap-4 p-6"><div><p className={`font-semibold ${error ? "text-red-800" : "text-[#173b39]"}`}>{title}</p><p className={`mt-1 text-sm ${error ? "text-red-700" : "text-[#48655d]"}`}>{body}</p></div>{action}</CardContent></Card>;
-}
+function State({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) { return <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none"><CardContent className="flex gap-3 p-6">{icon}<div><p className="font-semibold text-[#173b39]">{title}</p><p className="mt-1 text-sm text-[#48655d]">{body}</p></div></CardContent></Card>; }

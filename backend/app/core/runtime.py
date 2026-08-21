@@ -19,6 +19,8 @@ def validate_runtime_configuration() -> None:
             errors.append("RATE_LIMIT_ENABLED must be true in production")
         if not settings.redis_url:
             errors.append("REDIS_URL is required for distributed production rate limiting")
+        if not settings.background_jobs_enabled:
+            errors.append("BACKGROUND_JOBS_ENABLED must be true in production")
 
     if errors:
         raise RuntimeError("Invalid MarketSense runtime configuration: " + "; ".join(errors))

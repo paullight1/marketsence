@@ -1,6 +1,9 @@
-from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Boolean, Text, JSON
-from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
+import uuid
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy.orm import relationship
+
 from app.db.database import Base
 
 
@@ -92,3 +95,28 @@ class SuspiciousListing(Base):
     severity = Column(String(20), default="low")
     reviewed = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utc_now)
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint("job_type", "idempotency_key", name="uq_jobs_type_idempotency"),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_type = Column(String(50), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    payload = Column(JSON, nullable=False, default=dict)
+    result = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    idempotency_key = Column(String(255), nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    available_at = Column(DateTime, nullable=False, default=utc_now, index=True)
+    lease_expires_at = Column(DateTime, nullable=True, index=True)
+    worker_id = Column(String(255), nullable=True)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
