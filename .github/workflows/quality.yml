@@ -115,7 +115,7 @@ jobs:
         run: npm run build
 
   frontend-audit:
-    name: Production npm dependency audit
+    name: Frontend dependency audit
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -131,5 +131,5 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install frontend dependencies
         run: npm ci
-      - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+      - name: Audit all frontend dependencies
+        run: npm audit --audit-level=high
