@@ -1,6 +1,10 @@
+import asyncio
+
 import pytest
 
 from app.core.config import settings
+from app.models.models import Product, RawListing, Supplier
+from conftest import TestSessionLocal
 
 
 @pytest.mark.parametrize(
@@ -107,3 +111,96 @@ def test_ops_marks_benchmarking_blocked_until_products_are_linked(client):
     )
     assert benchmarking["stage"] == "Blocked"
     assert benchmarking["progress"] == 0
+
+
+def test_normalization_reports_unresolved_rows_when_catalog_is_empty(client):
+    ingest_response = client.post(
+        "/api/ingest/listings",
+        json={
+            "listings": [
+                {
+                    "source": "Jumia",
+                    "original_name": "Golden Penny Semovita 5kg",
+                    "price": 8500,
+                    "seller_name": "Jumia Nigeria",
+                    "seller_source": "website",
+                    "location": "Lagos",
+                    "url": "https://example.com/semovita",
+                }
+            ]
+        },
+    )
+    assert ingest_response.status_code == 200
+
+    response = client.post("/api/ingest/normalize")
+
+    assert response.status_code == 200
+    assert response.json()["linked_count"] == 0
+    assert response.json()["new_suggestions"] == 1
+
+
+def test_market_compare_returns_conflict_for_ambiguous_product_query(client):
+    async def seed_products():
+        async with TestSessionLocal() as db:
+            db.add_all(
+                [
+                    Product(normalized_name="rice 25kg"),
+                    Product(normalized_name="rice 50kg"),
+                ]
+            )
+            await db.commit()
+
+    asyncio.run(seed_products())
+
+    response = client.get("/api/market/compare", params={"product_name": "rice"})
+
+    assert response.status_code == 409
+    assert "multiple" in response.json()["detail"].lower()
+
+
+def test_benchmark_persists_extreme_outlier_once_for_review(client):
+    async def seed_market_data():
+        async with TestSessionLocal() as db:
+            product = Product(normalized_name="rice 25kg")
+            supplier = Supplier(
+                name="Benchmark Supplier",
+                source="seed",
+                location="Lagos",
+                trust_score=80,
+                total_listings=5,
+            )
+            db.add_all([product, supplier])
+            await db.flush()
+
+            for index, price in enumerate([100.0, 99.0, 101.0, 102.0, 1000.0]):
+                db.add(
+                    RawListing(
+                        source="seed",
+                        original_name=f"Rice 25kg observation {index}",
+                        price=price,
+                        seller_id=supplier.id,
+                        location="Lagos",
+                        product_id=product.id,
+                    )
+                )
+            await db.commit()
+
+    asyncio.run(seed_market_data())
+
+    first = client.post("/api/ingest/benchmark")
+    second = client.post("/api/ingest/benchmark")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["updated_products"] == 1
+
+    summary = client.get("/api/analytics/summary")
+    assert summary.status_code == 200
+    assert summary.json()["suspicious_prices"] == 1
+
+    ops = client.get("/api/ops/overview")
+    assert ops.status_code == 200
+    review_queue = next(
+        metric for metric in ops.json()["queue_metrics"] if metric["label"] == "Review queue"
+    )
+    assert review_queue["value"] == "1"
