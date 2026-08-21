@@ -23,6 +23,10 @@ def validate_runtime_configuration() -> None:
             errors.append("BACKGROUND_JOBS_ENABLED must be true in production")
         if not settings.database_url.startswith("postgresql+asyncpg://"):
             errors.append("Production DATABASE_URL must use PostgreSQL via postgresql+asyncpg://")
+        if settings.export_storage_backend != "s3":
+            errors.append("Production cleaned exports require private S3-compatible object storage")
+        if not settings.s3_bucket:
+            errors.append("S3_BUCKET is required for private S3-compatible export storage")
 
     if errors:
         raise RuntimeError("Invalid MarketSense runtime configuration: " + "; ".join(errors))

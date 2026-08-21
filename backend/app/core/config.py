@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "MarketSense NG API"
-    app_version: str = "0.5.0"
+    app_version: str = "0.6.0"
     environment: Literal["development", "test", "production"] = "development"
     database_url: str = "sqlite+aiosqlite:///./marketsense.db"
     allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     max_csv_upload_bytes: int = 5 * 1024 * 1024
     cleaned_csv_retention_hours: int = Field(default=24, ge=1, le=720)
     max_cleaned_csv_exports: int = Field(default=50, ge=1, le=1000)
+    export_storage_backend: Literal["local", "s3"] = "local"
+    s3_bucket: str = ""
+    s3_region: str = "us-east-1"
+    s3_prefix: str = "cleaned-exports"
+    s3_endpoint_url: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
 
     max_scrape_response_bytes: int = 2 * 1024 * 1024
     scrape_timeout_seconds: float = 15.0

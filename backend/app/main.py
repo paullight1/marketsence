@@ -10,6 +10,7 @@ from app.core.runtime import validate_runtime_configuration
 from app.core.security import require_role
 from app.db.database import init_db
 from app.schemas import HealthResponse, RootResponse
+from app.services.export_storage import build_export_storage
 
 
 @asynccontextmanager
@@ -17,11 +18,15 @@ async def lifespan(app: FastAPI):
     validate_runtime_configuration()
     await init_db()
     rate_limiter = build_rate_limiter()
+    export_storage = build_export_storage()
     await rate_limiter.ready()
-    app.state.rate_limiter = rate_limiter
     try:
+        await export_storage.ready()
+        app.state.rate_limiter = rate_limiter
+        app.state.export_storage = export_storage
         yield
     finally:
+        await export_storage.close()
         await rate_limiter.close()
 
 
@@ -32,7 +37,6 @@ def create_app() -> FastAPI:
 
     viewer = [Depends(require_role("viewer"))]
     analyst = [Depends(require_role("analyst"))]
-
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(products.router, prefix="/api/products", tags=["products"], dependencies=viewer)
     app.include_router(suppliers.router, prefix="/api/suppliers", tags=["suppliers"], dependencies=viewer)
