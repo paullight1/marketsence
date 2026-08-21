@@ -1,3 +1,5 @@
+import { clearSession, getAccessToken } from "@/lib/auth";
+
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
 
@@ -11,83 +13,32 @@ export type DashboardSummary = {
   avg_trust_score: number;
 };
 
-export type CategoryBreakdown = {
-  category: string;
-  count: number;
-};
+export type CategoryBreakdown = { category: string; count: number };
+export type ProductSummary = { id: number; name: string; category: string | null; brand: string | null; avg_price: number; min_price: number; max_price: number; listings_count: number; last_updated: string | null };
+export type SupplierSummary = { id: number; name: string; source: string; location: string | null; trust_score: number; total_listings: number; avg_price: number; suspicious_count: number };
+export type OpsMetric = { label: string; value: string; tone: string };
+export type OpsTask = { id: string; title: string; stage: string; owner: string; source: string; eta: string; progress: number; listings: number; note: string };
+export type OpsReviewAlert = { id: string; product: string; issue: string; severity: string; delta: number };
+export type OpsRecentListing = { id: number; product_name: string; price: number; seller: string; source: string; location: string | null; is_suspicious: boolean };
+export type OpsOverview = { queue_metrics: OpsMetric[]; tasks: OpsTask[]; review_alerts: OpsReviewAlert[]; recent_listings: OpsRecentListing[] };
 
-export type ProductSummary = {
-  id: number;
-  name: string;
-  category: string | null;
-  brand: string | null;
-  avg_price: number;
-  min_price: number;
-  max_price: number;
-  listings_count: number;
-  last_updated: string | null;
-};
+type ApiErrorBody = { detail?: unknown };
 
-export type SupplierSummary = {
-  id: number;
-  name: string;
-  source: string;
-  location: string | null;
-  trust_score: number;
-  total_listings: number;
-  avg_price: number;
-  suspicious_count: number;
-};
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  const token = getAccessToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
 
-export type OpsMetric = {
-  label: string;
-  value: string;
-  tone: string;
-};
-
-export type OpsTask = {
-  id: string;
-  title: string;
-  stage: string;
-  owner: string;
-  source: string;
-  eta: string;
-  progress: number;
-  listings: number;
-  note: string;
-};
-
-export type OpsReviewAlert = {
-  id: string;
-  product: string;
-  issue: string;
-  severity: string;
-  delta: number;
-};
-
-export type OpsRecentListing = {
-  id: number;
-  product_name: string;
-  price: number;
-  seller: string;
-  source: string;
-  location: string | null;
-  is_suspicious: boolean;
-};
-
-export type OpsOverview = {
-  queue_metrics: OpsMetric[];
-  tasks: OpsTask[];
-  review_alerts: OpsReviewAlert[];
-  recent_listings: OpsRecentListing[];
-};
-
-type ApiErrorBody = {
-  detail?: unknown;
-};
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+  if (response.status === 401 && typeof window !== "undefined" && window.location.pathname !== "/login") {
+    clearSession();
+    window.location.assign("/login");
+  }
+  return response;
+}
 
 export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  const response = await apiFetch(path, init);
 
   if (!response.ok) {
     let detail = `Request failed: ${response.status}`;
@@ -97,17 +48,12 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
         detail = payload.detail;
       } else if (Array.isArray(payload.detail)) {
         const messages = payload.detail
-          .map((item) => {
-            if (item && typeof item === "object" && "msg" in item) {
-              return String((item as { msg: unknown }).msg);
-            }
-            return "";
-          })
+          .map((item) => item && typeof item === "object" && "msg" in item ? String((item as { msg: unknown }).msg) : "")
           .filter(Boolean);
         if (messages.length) detail = messages.join("; ");
       }
     } catch {
-      // Keep the status-based message when the response is not JSON.
+      // Keep status-based message for non-JSON responses.
     }
     throw new Error(detail);
   }

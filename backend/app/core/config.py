@@ -1,15 +1,31 @@
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     app_name: str = "MarketSense NG API"
-    app_version: str = "0.3.0"
+    app_version: str = "0.4.0"
+    environment: Literal["development", "test", "production"] = "development"
     database_url: str = "sqlite+aiosqlite:///./marketsense.db"
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"]
     )
     sql_echo: bool = False
+
+    auth_enabled: bool = False
+    auth_secret: str = ""
+    auth_username: str = ""
+    auth_password_hash: str = ""
+    auth_role: Literal["viewer", "analyst", "admin"] = "admin"
+    auth_token_ttl_minutes: int = Field(default=30, ge=5, le=720)
+
+    rate_limit_enabled: bool = False
+    redis_url: str | None = None
+    auth_login_limit_per_minute: int = Field(default=5, ge=1, le=120)
+    read_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
+    write_limit_per_minute: int = Field(default=30, ge=1, le=1_000)
 
     max_csv_upload_bytes: int = 5 * 1024 * 1024
     cleaned_csv_retention_hours: int = Field(default=24, ge=1, le=720)
