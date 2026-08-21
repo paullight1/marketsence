@@ -1,6 +1,10 @@
-from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Boolean, Text, JSON
-from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
+import uuid
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.orm import relationship
+
+from app.core.money import MONEY_PRECISION, MONEY_SCALE
 from app.db.database import Base
 
 
@@ -38,14 +42,18 @@ class Product(Base):
 
 class RawListing(Base):
     __tablename__ = "raw_listings"
+    __table_args__ = (
+        UniqueConstraint("ingestion_key", name="uq_raw_listings_ingestion_key"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     source = Column(String(50), nullable=False)
     original_name = Column(String(255), nullable=False)
-    price = Column(Float, nullable=False)
+    price = Column(Numeric(MONEY_PRECISION, MONEY_SCALE), nullable=False)
     seller_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
     location = Column(String(100), nullable=True)
     url = Column(String(500), nullable=True)
+    ingestion_key = Column(String(64), nullable=True)
     raw_data = Column(JSON, nullable=True)
     is_suspicious = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utc_now)
@@ -60,7 +68,7 @@ class PriceHistory(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    price = Column(Float, nullable=False)
+    price = Column(Numeric(MONEY_PRECISION, MONEY_SCALE), nullable=False)
     recorded_at = Column(DateTime, default=utc_now)
     source = Column(String(50), nullable=True)
 
@@ -69,6 +77,9 @@ class PriceHistory(Base):
 
 class Supplier(Base):
     __tablename__ = "suppliers"
+    __table_args__ = (
+        UniqueConstraint("name", "source", name="uq_suppliers_name_source"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
@@ -92,3 +103,28 @@ class SuspiciousListing(Base):
     severity = Column(String(20), default="low")
     reviewed = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utc_now)
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        UniqueConstraint("job_type", "idempotency_key", name="uq_jobs_type_idempotency"),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_type = Column(String(50), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    payload = Column(JSON, nullable=False, default=dict)
+    result = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    idempotency_key = Column(String(255), nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    available_at = Column(DateTime, nullable=False, default=utc_now, index=True)
+    lease_expires_at = Column(DateTime, nullable=True, index=True)
+    worker_id = Column(String(255), nullable=True)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)

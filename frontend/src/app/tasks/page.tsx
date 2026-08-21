@@ -1,134 +1,84 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CheckCircle2, Clock3, ListChecks, RotateCcw, SearchCode } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, CheckCircle2, Clock3, ListChecks, Loader2, Play } from "lucide-react";
 import { WorkspaceShell } from "@/components/layout/workspace-shell";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { OpsOverview, OpsTask, fetchJson } from "@/lib/api";
+import { JobRecord, OpsOverview, fetchJson } from "@/lib/api";
 
-const columns = ["Queued", "Running", "Review", "Completed"] as const;
+const jobTone: Record<string, string> = { completed: "text-[#166534]", failed: "text-[#c2413a]", cancelled: "text-[#6b7280]", running: "text-[#2563eb]", retrying: "text-[#b45309]", queued: "text-[#173b39]" };
 
-function tasksForStage(tasks: OpsTask[], stage: string) {
-  return tasks.filter((task) => task.stage === stage);
+async function readQueue() {
+  return Promise.all([
+    fetchJson<OpsOverview>("/api/ops/overview"),
+    fetchJson<JobRecord[]>("/api/jobs/?limit=50"),
+  ]);
 }
 
 export default function TasksPage() {
   const [ops, setOps] = useState<OpsOverview | null>(null);
+  const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [action, setAction] = useState("");
 
-  useEffect(() => {
-    async function loadOps() {
-      try {
-        setOps(await fetchJson<OpsOverview>("/api/ops/overview"));
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Could not load task data");
-      }
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [opsData, jobData] = await readQueue();
+      setOps(opsData);
+      setJobs(jobData);
+    } catch (caught) {
+      setOps(null);
+      setJobs([]);
+      setError(caught instanceof Error ? caught.message : "Could not load job data");
+    } finally {
+      setLoading(false);
     }
-
-    loadOps();
   }, []);
 
-  const tasks = ops?.tasks ?? [];
+  useEffect(() => {
+    let active = true;
+    readQueue()
+      .then(([opsData, jobData]) => {
+        if (!active) return;
+        setOps(opsData);
+        setJobs(jobData);
+      })
+      .catch((caught: unknown) => {
+        if (!active) return;
+        setOps(null);
+        setJobs([]);
+        setError(caught instanceof Error ? caught.message : "Could not load job data");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
-  return (
-    <WorkspaceShell>
-      <section className="page-enter flex flex-col gap-2">
-        <span className="metric-pill w-fit">System design surface</span>
-        <h1 className="text-4xl font-semibold tracking-tight text-[#173b39]">
-          Task and queue workspace
-        </h1>
-        <p className="max-w-3xl text-sm text-[#48655d]">
-          This board is generated from live database counts: scrape intake, matching backlog, human review, and benchmark output.
-        </p>
-        {error ? (
-          <p className="w-fit rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
-          </p>
-        ) : null}
-      </section>
+  async function queue(kind: "normalize" | "benchmark") {
+    setAction(kind); setError("");
+    try { await fetchJson<JobRecord>(`/api/jobs/${kind}`, { method: "POST", headers: { "Idempotency-Key": `${kind}-${new Date().toISOString().slice(0, 16)}` } }); await refresh(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : `Could not queue ${kind}`); }
+    finally { setAction(""); }
+  }
 
-      <section className="page-enter grid gap-4 md:grid-cols-4">
-        {(ops?.queue_metrics ?? []).map((metric) => (
-          <Card key={metric.label} className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
-            <CardContent className="p-5">
-              <p className="text-sm text-muted-foreground">{metric.label}</p>
-              <p className={`mt-2 text-3xl font-semibold ${metric.tone === "warning" ? "text-[#b45309]" : "text-[#173b39]"}`}>
-                {metric.value}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
-      </section>
+  async function cancel(jobId: string) {
+    setAction(jobId); try { await fetchJson<JobRecord>(`/api/jobs/${jobId}/cancel`, { method: "POST" }); await refresh(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not cancel job"); } finally { setAction(""); }
+  }
 
-      <section className="page-enter grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <div className="grid gap-4 xl:grid-cols-4">
-          {columns.map((column) => (
-            <Card key={column} className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
-              <CardHeader>
-                <CardTitle className="text-base">{column}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {tasksForStage(tasks, column).map((task) => (
-                  <div key={task.id} className="rounded-xl border border-[#dce8e3] bg-[#fbfefd] p-4">
-                    <p className="font-semibold">{task.title}</p>
-                    <p className="mt-1 text-sm text-muted-foreground">{task.owner}</p>
-                    <p className="mt-3 text-sm text-[#48655d]">{task.note}</p>
-                    <div className="mt-4 h-2 rounded-full bg-[#e8f2ee]">
-                      <div className="h-2 rounded-full bg-[#3f8f78]" style={{ width: `${task.progress}%` }} />
-                    </div>
-                    <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{task.source}</span>
-                      <span>{task.eta}</span>
-                    </div>
-                  </div>
-                ))}
-                {!tasksForStage(tasks, column).length ? (
-                  <p className="rounded-xl border border-dashed border-[#dce8e3] bg-[#fbfefd] p-4 text-sm text-muted-foreground">
-                    No active jobs.
-                  </p>
-                ) : null}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        <div className="grid gap-6">
-          <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
-            <CardHeader>
-              <CardTitle className="text-base">Execution checklist</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm text-[#48655d]">
-              <div className="flex items-start gap-3"><SearchCode className="mt-0.5 size-4 text-[#3f8f78]" /><span>Scrape jobs are isolated from processing and can be retried safely.</span></div>
-              <div className="flex items-start gap-3"><RotateCcw className="mt-0.5 size-4 text-[#3f8f78]" /><span>Failed fetches stay visible as backlog instead of disappearing silently.</span></div>
-              <div className="flex items-start gap-3"><Clock3 className="mt-0.5 size-4 text-[#3f8f78]" /><span>Human review remains explicit for risky matches and abnormal prices.</span></div>
-              <div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 size-4 text-[#3f8f78]" /><span>Completed jobs publish into analytics only after verification.</span></div>
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">High-risk reviews</CardTitle>
-              <ListChecks className="size-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(ops?.review_alerts ?? []).map((alert) => (
-                <div key={alert.id} className="rounded-xl border border-[#dce8e3] bg-[#fbfefd] p-4">
-                  <p className="font-semibold">{alert.product}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">{alert.issue}</p>
-                  <p className="mt-3 text-sm font-medium text-[#c2413a]">
-                    {alert.delta}% delta - {alert.severity}
-                  </p>
-                </div>
-              ))}
-              {ops && !ops.review_alerts.length ? (
-                <p className="rounded-xl border border-dashed border-[#dce8e3] bg-[#fbfefd] p-4 text-sm text-muted-foreground">
-                  No high-risk reviews are waiting.
-                </p>
-              ) : null}
-            </CardContent>
-          </Card>
-        </div>
-      </section>
-    </WorkspaceShell>
-  );
+  return <WorkspaceShell>
+    <section className="page-enter flex flex-wrap items-end justify-between gap-4"><div><span className="metric-pill">Durable worker queue</span><h1 className="mt-3 text-4xl font-semibold text-[#173b39]">Jobs and review workspace</h1><p className="mt-2 max-w-3xl text-sm text-[#48655d]">Long-running scrape, normalization, benchmark, and large-import operations are persisted before a worker executes them.</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => queue("normalize")} disabled={Boolean(action)}>{action === "normalize" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />} Normalize</Button><Button onClick={() => queue("benchmark")} disabled={Boolean(action)} className="bg-[#173b39] text-white">{action === "benchmark" ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />} Benchmark</Button></div></section>
+    {error ? <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
+    {loading ? <State icon={<Clock3 className="size-5" />} title="Loading durable jobs" body="Reading job and pipeline state." /> : <>
+      <section className="grid gap-4 md:grid-cols-4">{(ops?.queue_metrics ?? []).map((metric) => <Card key={metric.label} className="rounded-2xl border-[#dce8e3] bg-white shadow-none"><CardContent className="p-5"><p className="text-sm text-muted-foreground">{metric.label}</p><p className="mt-2 text-3xl font-semibold text-[#173b39]">{metric.value}</p></CardContent></Card>)}</section>
+      <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none"><CardHeader><CardTitle className="flex items-center gap-2"><ListChecks className="size-5" />Durable jobs</CardTitle></CardHeader><CardContent className="space-y-3">{jobs.map((job) => <div key={job.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#dce8e3] bg-[#fbfefd] p-4"><div><p className="font-semibold capitalize">{job.job_type}</p><p className="text-xs text-muted-foreground">{job.id}</p><p className={`mt-1 text-sm font-medium ${jobTone[job.status] || ""}`}>{job.status} · attempt {job.attempts}/{job.max_attempts}</p>{job.error ? <p className="mt-1 max-w-2xl text-xs text-red-700">{job.error}</p> : null}</div>{["queued", "retrying", "running"].includes(job.status) ? <Button variant="outline" disabled={action === job.id} onClick={() => cancel(job.id)}>Cancel</Button> : null}</div>)}{!jobs.length ? <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">No durable jobs have been queued.</p> : null}</CardContent></Card>
+      <section className="grid gap-6 lg:grid-cols-2"><State icon={<AlertTriangle className="size-5 text-[#b45309]" />} title="Retry and lease safety" body="Failed attempts back off; stale worker leases are recovered so abandoned work does not disappear." /><State icon={<CheckCircle2 className="size-5 text-[#166534]" />} title="Review remains separate" body="Durable execution does not auto-approve suspicious prices or unresolved catalog matches." /></section>
+    </>}
+  </WorkspaceShell>;
 }
+
+function State({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) { return <Card className="rounded-2xl border-[#dce8e3] bg-white shadow-none"><CardContent className="flex gap-3 p-6">{icon}<div><p className="font-semibold text-[#173b39]">{title}</p><p className="mt-1 text-sm text-[#48655d]">{body}</p></div></CardContent></Card>; }

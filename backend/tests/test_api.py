@@ -29,6 +29,32 @@ def test_ingest_then_read_products(client):
     assert suppliers_response.json()[0]["name"] == "Jumia Nigeria"
 
 
+def test_bulk_ingest_reuses_one_supplier_and_counts_the_batch(client):
+    ingest_payload = {
+        "listings": [
+            {
+                "source": "Market survey",
+                "original_name": f"Rice observation {index}",
+                "price": 40000 + index,
+                "seller_name": "Balogun Market Seller",
+                "seller_source": "field",
+                "location": "Lagos",
+                "url": f"https://example.com/rice/{index}",
+            }
+            for index in range(25)
+        ]
+    }
+
+    ingest_response = client.post("/api/ingest/listings", json=ingest_payload)
+    suppliers_response = client.get("/api/suppliers")
+
+    assert ingest_response.status_code == 200
+    assert ingest_response.json()["added"] == 25
+    assert suppliers_response.status_code == 200
+    assert len(suppliers_response.json()) == 1
+    assert suppliers_response.json()[0]["total_listings"] == 25
+
+
 def test_product_search_route_is_not_shadowed_by_id_route(client):
     payload = {
         "listings": [

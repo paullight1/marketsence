@@ -1,10 +1,14 @@
 import re
+import time
 import uuid
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+from app.core.config import settings
 
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "data" / "cleaned_uploads"
@@ -20,9 +24,16 @@ NAME_COLUMNS = [
 ]
 PRICE_COLUMNS = ["price", "amount", "listing_price", "current_price", "cost"]
 DATE_COLUMNS = ["scraped_at", "created_at", "date", "listed_at", "timestamp"]
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
-def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[str, Any]:
+@dataclass(frozen=True)
+class CleanedCsvArtifact:
+    metadata: dict[str, Any]
+    content: bytes
+
+
+def build_cleaned_csv(content: bytes, original_filename: str | None) -> CleanedCsvArtifact:
     if not content:
         raise ValueError("Uploaded CSV is empty")
 
@@ -37,7 +48,7 @@ def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[st
     rows_before = len(df)
     missing_before = _missing_counts(df)
 
-    df = df.rename(columns={column: _normalize_column_name(column) for column in df.columns})
+    df.columns = _unique_column_names([_normalize_column_name(column) for column in df.columns])
     for column in df.select_dtypes(include=["object"]).columns:
         df[column] = df[column].astype("string").str.strip()
         df[column] = df[column].replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
@@ -48,14 +59,11 @@ def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[st
 
     if name_column:
         df["clean_name"] = df[name_column].fillna("").map(_clean_name)
-
     if price_column:
         df["clean_price"] = df[price_column].map(_clean_price)
-
     if date_column:
         df["clean_date"] = pd.to_datetime(df[date_column], errors="coerce", utc=True)
         df["clean_date"] = df["clean_date"].dt.date.astype("string")
-
     if "location" in df.columns:
         df["location"] = df["location"].fillna("Unknown")
 
@@ -69,18 +77,19 @@ def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[st
 
     df = df.drop_duplicates(subset=dedupe_subset)
     rows_after = len(df)
-
     missing_after = _missing_counts(df)
+
     file_id = uuid.uuid4().hex
     safe_name = _safe_filename(original_filename or "uploaded.csv")
     output_name = f"{file_id}_{safe_name.replace('.csv', '')}_cleaned.csv"
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / output_name
-    df.to_csv(output_path, index=False)
+
+    export_df = df.copy()
+    for column in export_df.select_dtypes(include=["object", "string"]).columns:
+        export_df[column] = export_df[column].map(_escape_spreadsheet_formula)
+    export_content = export_df.to_csv(index=False).encode("utf-8")
 
     preview = df.head(12).where(pd.notnull(df), None).to_dict(orient="records")
-
-    return {
+    metadata = {
         "file_id": file_id,
         "download_filename": output_name,
         "rows_before": rows_before,
@@ -95,22 +104,87 @@ def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[st
         "preview": preview,
         "message": "CSV cleaned successfully",
     }
+    return CleanedCsvArtifact(metadata=metadata, content=export_content)
+
+
+def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[str, Any]:
+    """Backward-compatible local helper for scripts; API routes use export storage."""
+    artifact = build_cleaned_csv(content, original_filename)
+    persist_local_export(
+        artifact.metadata["file_id"],
+        artifact.content,
+        artifact.metadata["download_filename"],
+    )
+    return artifact.metadata
+
+
+def persist_local_export(file_id: str, content: bytes, filename: str) -> Path:
+    if not re.fullmatch(r"[a-f0-9]{32}", file_id):
+        raise ValueError("Invalid export file id")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_cleaned_exports(reserve_slots=1)
+    path = OUTPUT_DIR / Path(filename).name
+    path.write_bytes(content)
+    return path
 
 
 def get_cleaned_csv_path(file_id: str) -> Path | None:
     if not re.fullmatch(r"[a-f0-9]{32}", file_id):
         return None
-
+    _prune_cleaned_exports()
     matches = list(OUTPUT_DIR.glob(f"{file_id}_*.csv"))
     if not matches:
         return None
     return matches[0]
 
 
+def read_local_export(file_id: str) -> tuple[bytes, str] | None:
+    path = get_cleaned_csv_path(file_id)
+    if path is None:
+        return None
+    return path.read_bytes(), path.name
+
+
+def _prune_cleaned_exports(*, reserve_slots: int = 0) -> None:
+    if not OUTPUT_DIR.exists():
+        return
+    cutoff = time.time() - (settings.cleaned_csv_retention_hours * 3600)
+    retained: list[tuple[float, Path]] = []
+    for path in OUTPUT_DIR.glob("*.csv"):
+        try:
+            modified_at = path.stat().st_mtime
+        except OSError:
+            continue
+        if modified_at < cutoff:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        retained.append((modified_at, path))
+    retained.sort(key=lambda item: item[0], reverse=True)
+    max_existing = max(settings.max_cleaned_csv_exports - reserve_slots, 0)
+    for _, path in retained[max_existing:]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
 def _normalize_column_name(column: object) -> str:
     normalized = str(column).strip().lower()
     normalized = re.sub(r"[^a-z0-9]+", "_", normalized)
     return normalized.strip("_") or "column"
+
+
+def _unique_column_names(columns: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    unique: list[str] = []
+    for column in columns:
+        seen[column] = seen.get(column, 0) + 1
+        count = seen[column]
+        unique.append(column if count == 1 else f"{column}_{count}")
+    return unique
 
 
 def _first_existing(df: pd.DataFrame, candidates: list[str]) -> str | None:
@@ -124,19 +198,22 @@ def _clean_name(value: object) -> str:
     text = "" if pd.isna(value) else str(value).lower()
     text = re.sub(r"\b(promo|price|wholesale|special|offer|buy now|shop now)\b", " ", text)
     text = re.sub(r"[^a-z0-9\s]+", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _clean_price(value: object) -> float | None:
     if pd.isna(value):
         return None
+    match = re.search(r"\d+(?:\.\d+)?", str(value).replace(",", ""))
+    return float(match.group(0)) if match else None
 
-    text = str(value).replace(",", "")
-    match = re.search(r"\d+(?:\.\d+)?", text)
-    if not match:
-        return None
-    return float(match.group(0))
+
+def _escape_spreadsheet_formula(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    if value.lstrip().startswith(FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
 
 
 def _missing_counts(df: pd.DataFrame) -> dict[str, int]:
