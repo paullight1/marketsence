@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.schemas import ProductDetail, ProductSearchResult, ProductSummary
@@ -10,17 +11,20 @@ router = APIRouter()
 
 
 @router.get("/search", response_model=list[ProductSearchResult])
-async def search_products_route(q: str, db: AsyncSession = Depends(get_db)):
+async def search_products_route(
+    q: str = Query(min_length=1, max_length=120),
+    db: AsyncSession = Depends(get_db),
+):
     return await search_products(db, q)
 
 
 @router.get("/", response_model=list[ProductSummary])
 async def list_products_route(
     db: AsyncSession = Depends(get_db),
-    category: Optional[str] = None,
-    search: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    category: Optional[str] = Query(default=None, max_length=100),
+    search: Optional[str] = Query(default=None, max_length=120),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100_000),
 ):
     return await list_products(
         db, category=category, search=search, limit=limit, offset=offset

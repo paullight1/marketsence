@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
-from app.models.models import Product, RawListing, Supplier, SuspiciousListing
+from app.models.models import PriceHistory, RawListing, Supplier, SuspiciousListing
 from app.schemas import OpsOverview
 
 router = APIRouter()
@@ -11,11 +11,23 @@ router = APIRouter()
 
 @router.get("/overview", response_model=OpsOverview)
 async def get_ops_overview(db: AsyncSession = Depends(get_db)):
-    product_count = await _count(db, Product.id)
     supplier_count = await _count(db, Supplier.id)
     listing_count = await _count(db, RawListing.id)
-    suspicious_count = await _count(db, SuspiciousListing.id)
-    unlinked_count = await _count_where(db, RawListing.id, RawListing.product_id.is_(None))
+    unlinked_count = await _count_where(
+        db, RawListing.id, RawListing.product_id.is_(None)
+    )
+    linked_product_count = await _count_distinct_where(
+        db, RawListing.product_id, RawListing.product_id.is_not(None)
+    )
+    benchmarked_product_count = await _count_distinct_where(
+        db,
+        PriceHistory.product_id,
+        PriceHistory.source == "System Benchmark",
+    )
+    suspicious_total = await _count(db, SuspiciousListing.id)
+    suspicious_unreviewed = await _count_where(
+        db, SuspiciousListing.id, SuspiciousListing.reviewed.is_(False)
+    )
 
     recent_result = await db.execute(
         select(RawListing, Supplier.name)
@@ -37,17 +49,35 @@ async def get_ops_overview(db: AsyncSession = Depends(get_db)):
         for listing, seller_name in recent_result.all()
     ]
 
-    review_alerts = [
-        {
-            "id": f"review-{index + 1}",
-            "product": item["product_name"],
-            "issue": "Flagged price or unresolved match",
-            "severity": "High" if item["is_suspicious"] else "Medium",
-            "delta": 0,
-        }
-        for index, item in enumerate(recent_listings[:4])
-        if item["is_suspicious"] or unlinked_count
-    ]
+    review_alerts = await _review_alerts(db)
+
+    if listing_count == 0:
+        normalization_stage = "Queued"
+        normalization_eta = "Waiting for listings"
+    elif unlinked_count:
+        normalization_stage = "Review"
+        normalization_eta = f"{unlinked_count} unresolved"
+    else:
+        normalization_stage = "Completed"
+        normalization_eta = "Done"
+
+    if linked_product_count == 0:
+        benchmark_stage = "Blocked"
+        benchmark_eta = "Needs linked products"
+        benchmark_progress = 0
+    elif benchmarked_product_count >= linked_product_count:
+        benchmark_stage = "Completed"
+        benchmark_eta = "Current"
+        benchmark_progress = 100
+    else:
+        benchmark_stage = "Queued"
+        pending = linked_product_count - benchmarked_product_count
+        benchmark_eta = f"{pending} products pending"
+        benchmark_progress = _percentage(
+            benchmarked_product_count, linked_product_count
+        )
+
+    reviewed_count = suspicious_total - suspicious_unreviewed
 
     tasks = [
         {
@@ -56,57 +86,120 @@ async def get_ops_overview(db: AsyncSession = Depends(get_db)):
             "stage": "Completed" if listing_count else "Queued",
             "owner": "API",
             "source": "All sources",
-            "eta": "Live",
+            "eta": "Live" if listing_count else "Waiting for input",
             "progress": 100 if listing_count else 0,
             "listings": listing_count,
-            "note": "Raw scrape and CSV rows are persisted before processing.",
+            "note": "Raw scrape and listing rows are persisted before downstream processing.",
         },
         {
             "id": "normalization",
             "title": "Product normalization",
-            "stage": "Review" if unlinked_count else "Completed",
+            "stage": normalization_stage,
             "owner": "Matching pipeline",
             "source": "Catalog",
-            "eta": f"{unlinked_count} unresolved" if unlinked_count else "Done",
+            "eta": normalization_eta,
             "progress": _percentage(listing_count - unlinked_count, listing_count),
             "listings": unlinked_count,
-            "note": "Unlinked rows should be matched or sent to analyst review.",
+            "note": "Unlinked rows remain visible until they are matched to canonical products.",
         },
         {
             "id": "benchmarking",
             "title": "Benchmark refresh",
-            "stage": "Queued" if product_count else "Queued",
+            "stage": benchmark_stage,
             "owner": "Analytics",
             "source": "System",
-            "eta": "After normalization",
-            "progress": 35 if product_count else 0,
-            "listings": product_count,
-            "note": "Benchmarks are recalculated after listings are linked to products.",
+            "eta": benchmark_eta,
+            "progress": benchmark_progress,
+            "listings": linked_product_count,
+            "note": "Benchmark status is derived from linked products and persisted benchmark history.",
         },
         {
             "id": "review",
             "title": "Suspicious price review",
-            "stage": "Review" if suspicious_count else "Completed",
+            "stage": "Review" if suspicious_unreviewed else "Completed",
             "owner": "Analyst",
             "source": "Quality control",
-            "eta": f"{suspicious_count} flagged",
-            "progress": 100 if not suspicious_count else 65,
-            "listings": suspicious_count,
-            "note": "Outliers stay visible before benchmark publication.",
+            "eta": (
+                f"{suspicious_unreviewed} flagged"
+                if suspicious_unreviewed
+                else "No open flags"
+            ),
+            "progress": (
+                _percentage(reviewed_count, suspicious_total)
+                if suspicious_total
+                else 100
+            ),
+            "listings": suspicious_unreviewed,
+            "note": "Only explicit suspicious-listing records enter this review queue.",
         },
     ]
 
     return {
         "queue_metrics": [
             {"label": "Raw listings", "value": str(listing_count), "tone": "default"},
-            {"label": "Unresolved matches", "value": str(unlinked_count), "tone": "warning" if unlinked_count else "success"},
+            {
+                "label": "Unresolved matches",
+                "value": str(unlinked_count),
+                "tone": "warning" if unlinked_count else "success",
+            },
             {"label": "Suppliers", "value": str(supplier_count), "tone": "default"},
-            {"label": "Review queue", "value": str(suspicious_count), "tone": "warning" if suspicious_count else "success"},
+            {
+                "label": "Review queue",
+                "value": str(suspicious_unreviewed),
+                "tone": "warning" if suspicious_unreviewed else "success",
+            },
         ],
         "tasks": tasks,
         "review_alerts": review_alerts,
         "recent_listings": recent_listings,
     }
+
+
+async def _review_alerts(db: AsyncSession) -> list[dict]:
+    flagged_result = await db.execute(
+        select(SuspiciousListing, RawListing)
+        .join(RawListing, SuspiciousListing.listing_id == RawListing.id)
+        .where(SuspiciousListing.reviewed.is_(False))
+        .order_by(SuspiciousListing.created_at.desc())
+        .limit(4)
+    )
+    flagged_rows = flagged_result.all()
+
+    alerts = [
+        {
+            "id": f"suspicious-{flag.id}",
+            "product": listing.original_name,
+            "issue": flag.reason,
+            "severity": str(flag.severity or "medium").title(),
+            "delta": 0,
+        }
+        for flag, listing in flagged_rows
+    ]
+
+    if len(alerts) >= 4:
+        return alerts
+
+    excluded_ids = [listing.id for _, listing in flagged_rows]
+    unresolved_query = (
+        select(RawListing)
+        .where(RawListing.product_id.is_(None))
+        .order_by(RawListing.created_at.desc())
+    )
+    if excluded_ids:
+        unresolved_query = unresolved_query.where(RawListing.id.notin_(excluded_ids))
+
+    unresolved_result = await db.execute(unresolved_query.limit(4 - len(alerts)))
+    alerts.extend(
+        {
+            "id": f"unresolved-{listing.id}",
+            "product": listing.original_name,
+            "issue": "Product match unresolved",
+            "severity": "Medium",
+            "delta": 0,
+        }
+        for listing in unresolved_result.scalars().all()
+    )
+    return alerts
 
 
 async def _count(db: AsyncSession, column) -> int:
@@ -116,6 +209,11 @@ async def _count(db: AsyncSession, column) -> int:
 
 async def _count_where(db: AsyncSession, column, condition) -> int:
     result = await db.execute(select(func.count(column)).where(condition))
+    return int(result.scalar() or 0)
+
+
+async def _count_distinct_where(db: AsyncSession, column, condition) -> int:
+    result = await db.execute(select(func.count(func.distinct(column))).where(condition))
     return int(result.scalar() or 0)
 
 

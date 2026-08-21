@@ -20,6 +20,7 @@ NAME_COLUMNS = [
 ]
 PRICE_COLUMNS = ["price", "amount", "listing_price", "current_price", "cost"]
 DATE_COLUMNS = ["scraped_at", "created_at", "date", "listed_at", "timestamp"]
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[str, Any]:
@@ -37,7 +38,9 @@ def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[st
     rows_before = len(df)
     missing_before = _missing_counts(df)
 
-    df = df.rename(columns={column: _normalize_column_name(column) for column in df.columns})
+    df.columns = _unique_column_names(
+        [_normalize_column_name(column) for column in df.columns]
+    )
     for column in df.select_dtypes(include=["object"]).columns:
         df[column] = df[column].astype("string").str.strip()
         df[column] = df[column].replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
@@ -76,7 +79,11 @@ def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[st
     output_name = f"{file_id}_{safe_name.replace('.csv', '')}_cleaned.csv"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     output_path = OUTPUT_DIR / output_name
-    df.to_csv(output_path, index=False)
+
+    export_df = df.copy()
+    for column in export_df.select_dtypes(include=["object", "string"]).columns:
+        export_df[column] = export_df[column].map(_escape_spreadsheet_formula)
+    export_df.to_csv(output_path, index=False)
 
     preview = df.head(12).where(pd.notnull(df), None).to_dict(orient="records")
 
@@ -113,6 +120,16 @@ def _normalize_column_name(column: object) -> str:
     return normalized.strip("_") or "column"
 
 
+def _unique_column_names(columns: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    unique: list[str] = []
+    for column in columns:
+        seen[column] = seen.get(column, 0) + 1
+        count = seen[column]
+        unique.append(column if count == 1 else f"{column}_{count}")
+    return unique
+
+
 def _first_existing(df: pd.DataFrame, candidates: list[str]) -> str | None:
     for candidate in candidates:
         if candidate in df.columns:
@@ -137,6 +154,14 @@ def _clean_price(value: object) -> float | None:
     if not match:
         return None
     return float(match.group(0))
+
+
+def _escape_spreadsheet_formula(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    if value.lstrip().startswith(FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
 
 
 def _missing_counts(df: pd.DataFrame) -> dict[str, int]:

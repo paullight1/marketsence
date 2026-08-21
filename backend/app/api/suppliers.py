@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.schemas import SupplierDetail, SupplierListingItem, SupplierSummary
@@ -12,10 +13,10 @@ router = APIRouter()
 @router.get("/", response_model=list[SupplierSummary])
 async def list_suppliers_route(
     db: AsyncSession = Depends(get_db),
-    source: Optional[str] = None,
-    search: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
+    source: Optional[str] = Query(default=None, max_length=50),
+    search: Optional[str] = Query(default=None, max_length=120),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=100_000),
 ):
     return await list_suppliers(
         db, source=source, search=search, limit=limit, offset=offset
@@ -34,6 +35,6 @@ async def get_supplier_route(supplier_id: int, db: AsyncSession = Depends(get_db
 async def get_supplier_listings_route(
     supplier_id: int,
     db: AsyncSession = Depends(get_db),
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=100),
 ):
     return await get_supplier_listings(db, supplier_id, limit=limit)

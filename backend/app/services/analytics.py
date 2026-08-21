@@ -4,18 +4,20 @@ import pandas as pd
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Category, PriceHistory, Product, RawListing, Supplier, SuspiciousListing
+from app.models.models import (
+    Category,
+    PriceHistory,
+    Product,
+    RawListing,
+    Supplier,
+    SuspiciousListing,
+)
 
 logger = logging.getLogger(__name__)
 
+
 async def calculate_market_benchmarks(db: AsyncSession):
-    """
-    TEACHING POINT: 
-    This service takes all raw listings and calculates a 'Golden Price' 
-    for every product. We use a Weighted Average based on the Supplier's Trust Score.
-    """
-    
-    # 1. Fetch all listings that are linked to a product
+    """Calculate one trust-weighted benchmark price for each linked product."""
     result = await db.execute(
         select(RawListing, Supplier.trust_score)
         .join(Supplier, RawListing.seller_id == Supplier.id)
@@ -23,46 +25,57 @@ async def calculate_market_benchmarks(db: AsyncSession):
     )
     data = []
     for row, trust in result:
-        data.append({
-            "product_id": row.product_id,
-            "price": row.price,
-            "trust_score": trust or 50.0 # Default trust if none set
-        })
+        data.append(
+            {
+                "product_id": row.product_id,
+                "price": row.price,
+                "trust_score": trust if trust is not None else 50.0,
+            }
+        )
 
     if not data:
         return 0
 
-    # 2. Load into Pandas for statistical math
     df = pd.DataFrame(data)
 
-    # 3. OUTLIER DETECTION (The 'Waz' Way)
-    # We remove any price that is more than 2 standard deviations away from the mean.
-    # This stops 'Ghost Prices' from ruining the benchmark.
     def remove_outliers(group):
-        if len(group) < 3: return group # Need enough data to detect outliers
-        mean = group['price'].mean()
-        std = group['price'].std()
-        return group[(group['price'] >= mean - 2*std) & (group['price'] <= mean + 2*std)]
+        if len(group) < 3:
+            return group
+        mean = group["price"].mean()
+        std = group["price"].std()
+        if pd.isna(std) or std == 0:
+            return group
+        return group[
+            (group["price"] >= mean - 2 * std)
+            & (group["price"] <= mean + 2 * std)
+        ]
 
-    df = df.groupby("product_id", group_keys=False).apply(remove_outliers).reset_index(drop=True)
+    df = (
+        df.groupby("product_id", group_keys=False)
+        .apply(remove_outliers, include_groups=False)
+        .reset_index(drop=False)
+    )
 
-    # 4. WEIGHTED AVERAGE CALCULATION
-    # Formula: Sum(Price * Trust) / Sum(Trust)
     def weighted_mean(group):
-        weights = group['trust_score']
-        return (group['price'] * weights).sum() / weights.sum()
+        weights = group["trust_score"].clip(lower=0)
+        total_weight = weights.sum()
+        if total_weight <= 0:
+            return group["price"].mean()
+        return (group["price"] * weights).sum() / total_weight
 
-    benchmarks = df.groupby("product_id").apply(weighted_mean)
+    benchmarks = df.groupby("product_id").apply(
+        weighted_mean, include_groups=False
+    )
 
-    # 5. Save the results to PriceHistory
     updated_count = 0
     for product_id, golden_price in benchmarks.items():
-        new_history = PriceHistory(
-            product_id=product_id,
-            price=float(golden_price),
-            source="System Benchmark"
+        db.add(
+            PriceHistory(
+                product_id=int(product_id),
+                price=float(golden_price),
+                source="System Benchmark",
+            )
         )
-        db.add(new_history)
         updated_count += 1
 
     await db.commit()
@@ -70,20 +83,18 @@ async def calculate_market_benchmarks(db: AsyncSession):
 
 
 async def get_dashboard_summary(db: AsyncSession) -> dict:
-    products_count = await db.execute(select(Product))
-    suppliers_count = await db.execute(select(Supplier))
-    listings_count = await db.execute(select(RawListing))
-    suspicious_count = await db.execute(select(SuspiciousListing))
-    trust_result = await db.execute(select(Supplier.trust_score))
-
-    trust_scores = [row for row in trust_result.scalars().all() if row is not None]
-    avg_trust = sum(trust_scores) / len(trust_scores) if trust_scores else 0
+    products_count = await _count(db, Product.id)
+    suppliers_count = await _count(db, Supplier.id)
+    listings_count = await _count(db, RawListing.id)
+    suspicious_count = await _count(db, SuspiciousListing.id)
+    trust_result = await db.execute(select(func.avg(Supplier.trust_score)))
+    avg_trust = float(trust_result.scalar() or 0)
 
     return {
-        "total_products": len(products_count.scalars().all()),
-        "total_suppliers": len(suppliers_count.scalars().all()),
-        "total_listings": len(listings_count.scalars().all()),
-        "suspicious_prices": len(suspicious_count.scalars().all()),
+        "total_products": products_count,
+        "total_suppliers": suppliers_count,
+        "total_listings": listings_count,
+        "suspicious_prices": suspicious_count,
         "avg_trust_score": round(avg_trust, 1),
     }
 
@@ -100,13 +111,24 @@ async def get_category_breakdown(db: AsyncSession) -> list[dict]:
 
 async def get_suspicious_summary(db: AsyncSession) -> dict:
     result = await db.execute(
-        select(SuspiciousListing).where(SuspiciousListing.reviewed.is_(False))
+        select(
+            func.count(SuspiciousListing.id),
+            func.count(SuspiciousListing.id).filter(
+                SuspiciousListing.severity == "high"
+            ),
+            func.count(SuspiciousListing.id).filter(
+                SuspiciousListing.severity == "medium"
+            ),
+        ).where(SuspiciousListing.reviewed.is_(False))
     )
-    items = result.scalars().all()
-    high = sum(1 for item in items if item.severity == "high")
-    medium = sum(1 for item in items if item.severity == "medium")
+    total_unreviewed, high, medium = result.one()
     return {
-        "total_unreviewed": len(items),
-        "high_severity": high,
-        "medium_severity": medium,
+        "total_unreviewed": int(total_unreviewed or 0),
+        "high_severity": int(high or 0),
+        "medium_severity": int(medium or 0),
     }
+
+
+async def _count(db: AsyncSession, column) -> int:
+    result = await db.execute(select(func.count(column)))
+    return int(result.scalar() or 0)
