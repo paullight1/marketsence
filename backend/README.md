@@ -1,11 +1,6 @@
 # MarketSense NG Backend
 
-This backend is a small FastAPI service for a Nigerian price intelligence project. It is intentionally scoped to teach core backend ideas that show up in interviews:
-
-- `FastAPI`: application setup, dependency injection, request validation, response models.
-- `Routes`: product, supplier, market, analytics, and ingest endpoints.
-- `Requests`: POSTing listing payloads into the system and reading JSON responses back.
-- `Databases`: async SQLAlchemy sessions, models, persistence, and query services.
+The MarketSense backend is a FastAPI service for Nigerian market-price intelligence. It keeps HTTP routes thin and separates API contracts, persistence models, scraping/cleaning, matching, benchmark logic, and catalog queries.
 
 ## Run locally
 
@@ -14,91 +9,91 @@ cd backend
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
+copy .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-Open the docs at [http://localhost:8000/docs](http://localhost:8000/docs).
+Open the API docs at `http://localhost:8000/docs`.
+
+### Optional browser scraping
+
+Core installs use the guarded HTTP scraper. Browser automation is intentionally optional:
+
+```powershell
+pip install -r requirements-browser.txt
+crawl4ai-setup
+```
+
+Do not enable it for arbitrary URLs. Configure trusted domains explicitly with `BROWSER_SCRAPER_ENABLED=true` and `BROWSER_SCRAPE_ALLOWED_DOMAINS=["trusted.example"]`.
 
 ## Key files
 
-- [app/main.py](C:/Users/USER/Desktop/app-projects/zlearning/PRICE%20INTELLIGENCE%20SYSTEM/backend/app/main.py): FastAPI app factory and router registration.
-- [app/db/database.py](C:/Users/USER/Desktop/app-projects/zlearning/PRICE%20INTELLIGENCE%20SYSTEM/backend/app/db/database.py): async engine and session dependency.
-- [app/models/models.py](C:/Users/USER/Desktop/app-projects/zlearning/PRICE%20INTELLIGENCE%20SYSTEM/backend/app/models/models.py): SQLAlchemy models.
-- [app/schemas.py](C:/Users/USER/Desktop/app-projects/zlearning/PRICE%20INTELLIGENCE%20SYSTEM/backend/app/schemas.py): request and response contracts.
-- [app/services](C:/Users/USER/Desktop/app-projects/zlearning/PRICE%20INTELLIGENCE%20SYSTEM/backend/app/services): backend business logic.
+- [`app/main.py`](app/main.py) - FastAPI application setup and router registration.
+- [`app/core/config.py`](app/core/config.py) - runtime configuration and ingestion safety limits.
+- [`app/db/database.py`](app/db/database.py) - async engine/session dependency and current local table initialization.
+- [`app/models/models.py`](app/models/models.py) - SQLAlchemy persistence models.
+- [`app/schemas.py`](app/schemas.py) - request/response contracts.
+- [`app/services/scraper.py`](app/services/scraper.py) - guarded scraping and optional trusted-domain browser fallback.
+- [`app/services/csv_cleaner.py`](app/services/csv_cleaner.py) - bounded CSV cleaning and export retention.
+- [`app/services/normalizer.py`](app/services/normalizer.py) - canonical-product matching and unresolved counts.
+- [`app/services/analytics.py`](app/services/analytics.py) - benchmarks, outlier review records, and analytics summaries.
+- [`app/services/catalog.py`](app/services/catalog.py) - set-based product/supplier aggregate queries.
+- [`app/services/ingest.py`](app/services/ingest.py) - batched supplier resolution and listing ingestion.
 
-## Teaching notes
+## HTTP-layer rule
 
-### FastAPI
+Routes should generally:
 
-FastAPI gives you three important pieces quickly:
+1. accept validated input,
+2. call a service,
+3. translate known domain/safety failures into a deliberate HTTP response,
+4. return a typed response model.
 
-1. Route declaration with decorators like `@router.get(...)`.
-2. Request parsing and validation with Pydantic.
-3. Dependency injection with `Depends(get_db)`.
+Business/data logic belongs under `app/services` so it can be tested independently of presentation code.
 
-That means your handler can stay thin and focus on orchestration, while schemas and services do the heavy lifting.
+## Ingestion safety boundary
 
-### Routes
+The current service includes application-level protections for the highest-risk input paths:
 
-Routes should do four things only:
+- scrape targets reject localhost/private/reserved literal addresses and resolve only to public network addresses,
+- HTTP redirect hops are revalidated,
+- scrape response type, size, redirect count, and timeout are bounded,
+- browser scraping is disabled by default and restricted to explicitly trusted domains when enabled,
+- CSV uploads have a byte limit before Pandas parsing,
+- cleaned exports neutralize spreadsheet-formula prefixes,
+- local cleaned exports expire and are count-bounded,
+- list API page sizes are bounded.
 
-1. Read validated input.
-2. Call a service function.
-3. Convert `None` or invalid state into an HTTP error where needed.
-4. Return a typed response.
+These controls are defense in depth, not a replacement for authentication, authorization, distributed rate limits, and infrastructure egress controls.
 
-Example from this project:
+## Data/analytics behavior
 
-```python
-@router.get("/{product_id}", response_model=ProductDetail)
-async def get_product_route(product_id: int, db: AsyncSession = Depends(get_db)):
-    product = await get_product(db, product_id)
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return product
+- Raw listings are persisted before explicit normalization.
+- Normalization reports unresolved listings rather than silently treating them as complete.
+- Market text lookups prefer exact product names and return a controlled ambiguity response for multiple partial matches.
+- Benchmark recalculation uses a robust median/MAD outlier rule when enough observations exist.
+- Extreme outliers create persistent `SuspiciousListing` review records and are excluded from benchmark price calculation.
+- Product/supplier list statistics are aggregated in set-based SQL instead of per-row N+1 queries.
+- Supplier resolution during bulk ingestion is batched rather than queried once per listing.
+
+## Testing
+
+```powershell
+python -m compileall app
+python -m pytest tests -q
 ```
 
-### Requests
+The root GitHub Actions workflow also runs frontend lint and production build gates.
 
-Use an HTTP client to exercise the backend. Example with Python `requests`:
+## Production gaps
 
-```python
-import requests
+Do not treat the current backend as a complete public production boundary yet. Before public release, add:
 
-payload = {
-    "listings": [
-        {
-            "source": "Jumia",
-            "original_name": "Dangote Sugar 50kg bag",
-            "price": 85000,
-            "seller_name": "Jumia Nigeria",
-            "seller_source": "online",
-            "location": "Lagos",
-            "url": "https://example.com/dangote-sugar"
-        }
-    ]
-}
-
-response = requests.post("http://localhost:8000/api/ingest/listings", json=payload)
-print(response.json())
-```
-
-The interview point here is simple: know the difference between request body validation, path/query parameters, and response shaping.
-
-### Databases
-
-This project uses:
-
-- SQLAlchemy models to define tables.
-- An async engine to connect.
-- A session dependency to give each request a unit of work.
-
-The important design split is:
-
-- `models.py`: database structure
-- `schemas.py`: API contract
-- `services/*.py`: query and business logic
-- `api/*.py`: HTTP layer
-
-That separation is what you should be able to explain in an interview.
+- authentication/authorization and distributed abuse controls,
+- durable queue/workers with retries and idempotency,
+- Postgres and Alembic-owned migrations instead of startup `create_all`,
+- fixed-point monetary columns instead of floating-point price storage,
+- database uniqueness/upsert constraints for concurrent ingestion,
+- object storage/lifecycle controls for cleaned exports,
+- infrastructure-level scrape egress policy,
+- dependency vulnerability/update automation and production observability.
