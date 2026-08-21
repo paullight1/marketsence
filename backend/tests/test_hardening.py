@@ -80,6 +80,29 @@ def test_clean_csv_download_escapes_spreadsheet_formulas(client):
     assert "'=HYPERLINK" in download_response.text
 
 
+def test_clean_csv_export_cache_is_bounded(client, monkeypatch, tmp_path):
+    from app.services import csv_cleaner
+
+    monkeypatch.setattr(csv_cleaner, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setitem(settings.__dict__, "max_cleaned_csv_exports", 2)
+    monkeypatch.setitem(settings.__dict__, "cleaned_csv_retention_hours", 24)
+
+    for index in range(3):
+        response = client.post(
+            "/api/ingest/clean-csv",
+            files={
+                "file": (
+                    f"sample-{index}.csv",
+                    f"name,price\nRice {index},100\n",
+                    "text/csv",
+                )
+            },
+        )
+        assert response.status_code == 200
+
+    assert len(list(tmp_path.glob("*.csv"))) == 2
+
+
 def test_product_list_rejects_unbounded_page_size(client):
     response = client.get("/api/products/", params={"limit": 101})
 
