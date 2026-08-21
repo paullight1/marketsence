@@ -39,7 +39,7 @@ def test_scrape_rejects_non_public_targets_before_fetch(client, monkeypatch, tar
 
 
 def test_clean_csv_rejects_upload_larger_than_configured_limit(client, monkeypatch):
-    monkeypatch.setattr(settings, "max_csv_upload_bytes", 48, raising=False)
+    monkeypatch.setitem(settings.__dict__, "max_csv_upload_bytes", 48)
     csv_content = (
         b"source,original_name,price\n"
         + b"Jumia,Big Bull Rice 25kg,37800\n" * 4
