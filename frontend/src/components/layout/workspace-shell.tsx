@@ -1,7 +1,7 @@
 import { ReactNode } from "react";
 import Link from "next/link";
+import { ListChecks, Search } from "lucide-react";
 import { Sidebar, navItems } from "@/components/layout/sidebar";
-import { Bell, Search } from "lucide-react";
 
 export function WorkspaceShell({
   children,
@@ -22,13 +22,22 @@ export function WorkspaceShell({
                 Price intelligence control room
               </h2>
             </div>
-            <div className="hidden max-w-[320px] flex-1 items-center gap-2 rounded-full border border-[#dce8e3] bg-white px-4 py-2 text-sm text-muted-foreground xl:flex">
-              <Search className="size-4" />
-              <span className="truncate">Search products, suppliers, or jobs</span>
+            <div className="ml-auto hidden items-center gap-2 xl:flex">
+              <Link
+                href="/products"
+                className="inline-flex items-center gap-2 rounded-full border border-[#dce8e3] bg-white px-4 py-2 text-sm font-medium text-[#48655d] hover:text-[#173b39]"
+              >
+                <Search className="size-4" />
+                Browse products
+              </Link>
+              <Link
+                href="/tasks"
+                aria-label="Open pipeline and review states"
+                className="grid size-10 place-items-center rounded-full border border-[#dce8e3] bg-white text-[#173b39] hover:bg-[#f8fcf9]"
+              >
+                <ListChecks className="size-4" />
+              </Link>
             </div>
-            <button className="grid size-10 shrink-0 place-items-center rounded-full border border-[#dce8e3] bg-white text-[#173b39]">
-              <Bell className="size-4" />
-            </button>
           </div>
           <nav className="mx-auto flex w-full max-w-7xl gap-2 overflow-x-auto px-4 pb-3 sm:px-5 lg:hidden">
             {navItems.map((item) => (

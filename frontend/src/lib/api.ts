@@ -1,6 +1,8 @@
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
 
+export const MAX_CSV_UPLOAD_BYTES = 5 * 1024 * 1024;
+
 export type DashboardSummary = {
   total_products: number;
   total_suppliers: number;
@@ -80,11 +82,34 @@ export type OpsOverview = {
   recent_listings: OpsRecentListing[];
 };
 
-export async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`);
+type ApiErrorBody = {
+  detail?: unknown;
+};
+
+export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    let detail = `Request failed: ${response.status}`;
+    try {
+      const payload = (await response.json()) as ApiErrorBody;
+      if (typeof payload.detail === "string") {
+        detail = payload.detail;
+      } else if (Array.isArray(payload.detail)) {
+        const messages = payload.detail
+          .map((item) => {
+            if (item && typeof item === "object" && "msg" in item) {
+              return String((item as { msg: unknown }).msg);
+            }
+            return "";
+          })
+          .filter(Boolean);
+        if (messages.length) detail = messages.join("; ");
+      }
+    } catch {
+      // Keep the status-based message when the response is not JSON.
+    }
+    throw new Error(detail);
   }
 
   return response.json() as Promise<T>;
