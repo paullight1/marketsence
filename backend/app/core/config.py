@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     sql_echo: bool = False
 
     max_csv_upload_bytes: int = 5 * 1024 * 1024
+    cleaned_csv_retention_hours: int = Field(default=24, ge=1, le=720)
+    max_cleaned_csv_exports: int = Field(default=50, ge=1, le=1000)
+
     max_scrape_response_bytes: int = 2 * 1024 * 1024
     scrape_timeout_seconds: float = 15.0
     max_scrape_redirects: int = 5

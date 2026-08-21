@@ -1,10 +1,13 @@
 import re
+import time
 import uuid
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+from app.core.config import settings
 
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "data" / "cleaned_uploads"
@@ -78,6 +81,7 @@ def clean_uploaded_csv(content: bytes, original_filename: str | None) -> dict[st
     safe_name = _safe_filename(original_filename or "uploaded.csv")
     output_name = f"{file_id}_{safe_name.replace('.csv', '')}_cleaned.csv"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_cleaned_exports(reserve_slots=1)
     output_path = OUTPUT_DIR / output_name
 
     export_df = df.copy()
@@ -108,10 +112,43 @@ def get_cleaned_csv_path(file_id: str) -> Path | None:
     if not re.fullmatch(r"[a-f0-9]{32}", file_id):
         return None
 
+    _prune_cleaned_exports()
     matches = list(OUTPUT_DIR.glob(f"{file_id}_*.csv"))
     if not matches:
         return None
     return matches[0]
+
+
+def _prune_cleaned_exports(*, reserve_slots: int = 0) -> None:
+    """Keep the local export cache bounded by age and file count."""
+    if not OUTPUT_DIR.exists():
+        return
+
+    cutoff = time.time() - (settings.cleaned_csv_retention_hours * 3600)
+    retained: list[tuple[float, Path]] = []
+
+    for path in OUTPUT_DIR.glob("*.csv"):
+        try:
+            modified_at = path.stat().st_mtime
+        except OSError:
+            continue
+
+        if modified_at < cutoff:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+
+        retained.append((modified_at, path))
+
+    retained.sort(key=lambda item: item[0], reverse=True)
+    max_existing = max(settings.max_cleaned_csv_exports - reserve_slots, 0)
+    for _, path in retained[max_existing:]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def _normalize_column_name(column: object) -> str:
