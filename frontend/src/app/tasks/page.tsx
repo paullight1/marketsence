@@ -9,6 +9,13 @@ import { JobRecord, OpsOverview, fetchJson } from "@/lib/api";
 
 const jobTone: Record<string, string> = { completed: "text-[#166534]", failed: "text-[#c2413a]", cancelled: "text-[#6b7280]", running: "text-[#2563eb]", retrying: "text-[#b45309]", queued: "text-[#173b39]" };
 
+async function readQueue() {
+  return Promise.all([
+    fetchJson<OpsOverview>("/api/ops/overview"),
+    fetchJson<JobRecord[]>("/api/jobs/?limit=50"),
+  ]);
+}
+
 export default function TasksPage() {
   const [ops, setOps] = useState<OpsOverview | null>(null);
   const [jobs, setJobs] = useState<JobRecord[]>([]);
@@ -16,26 +23,51 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true); setError("");
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError("");
     try {
-      const [opsData, jobData] = await Promise.all([fetchJson<OpsOverview>("/api/ops/overview"), fetchJson<JobRecord[]>("/api/jobs/?limit=50")]);
-      setOps(opsData); setJobs(jobData);
-    } catch (caught) { setOps(null); setJobs([]); setError(caught instanceof Error ? caught.message : "Could not load job data"); }
-    finally { setLoading(false); }
+      const [opsData, jobData] = await readQueue();
+      setOps(opsData);
+      setJobs(jobData);
+    } catch (caught) {
+      setOps(null);
+      setJobs([]);
+      setError(caught instanceof Error ? caught.message : "Could not load job data");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let active = true;
+    readQueue()
+      .then(([opsData, jobData]) => {
+        if (!active) return;
+        setOps(opsData);
+        setJobs(jobData);
+      })
+      .catch((caught: unknown) => {
+        if (!active) return;
+        setOps(null);
+        setJobs([]);
+        setError(caught instanceof Error ? caught.message : "Could not load job data");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   async function queue(kind: "normalize" | "benchmark") {
     setAction(kind); setError("");
-    try { await fetchJson<JobRecord>(`/api/jobs/${kind}`, { method: "POST", headers: { "Idempotency-Key": `${kind}-${new Date().toISOString().slice(0, 16)}` } }); await load(); }
+    try { await fetchJson<JobRecord>(`/api/jobs/${kind}`, { method: "POST", headers: { "Idempotency-Key": `${kind}-${new Date().toISOString().slice(0, 16)}` } }); await refresh(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : `Could not queue ${kind}`); }
     finally { setAction(""); }
   }
 
   async function cancel(jobId: string) {
-    setAction(jobId); try { await fetchJson<JobRecord>(`/api/jobs/${jobId}/cancel`, { method: "POST" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not cancel job"); } finally { setAction(""); }
+    setAction(jobId); try { await fetchJson<JobRecord>(`/api/jobs/${jobId}/cancel`, { method: "POST" }); await refresh(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not cancel job"); } finally { setAction(""); }
   }
 
   return <WorkspaceShell>
