@@ -1,0 +1,3 @@
+# Third-party Git repositories: keep nested .git histories separate from Evolve
+/research/upstreams/*/
+!/research/upstreams/.gitkeep

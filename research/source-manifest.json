@@ -1,0 +1,97 @@
+{
+  "name": "Evolve Geospatial Investment Intelligence upstream source manifest",
+  "generated_on": "2026-11-26",
+  "status": "Verified upstream GitHub repositories and pinned default-branch heads; actual source code is not yet vendored",
+  "sources": [
+    {
+      "slug": "marketlens",
+      "upstream": "GipsyDanger-dev/MarketLens",
+      "url": "https://github.com/GipsyDanger-dev/MarketLens",
+      "default_branch": "main",
+      "commit": "e1f86ba7dc16b69155e624eb23a37606e8b06f28",
+      "license": "Apache-2.0",
+      "local_path": "research/upstreams/marketlens"
+    },
+    {
+      "slug": "geolibre",
+      "upstream": "opengeos/GeoLibre",
+      "url": "https://github.com/opengeos/GeoLibre",
+      "default_branch": "main",
+      "commit": "396f015fdcb1b3958994bfc56e1038b4a568b532",
+      "license": "MIT",
+      "local_path": "research/upstreams/geolibre"
+    },
+    {
+      "slug": "geoagent",
+      "upstream": "opengeos/GeoAgent",
+      "url": "https://github.com/opengeos/GeoAgent",
+      "default_branch": "main",
+      "commit": "3cff6db6ac5dd96e44c46a1efd5d0890ecfc13cd",
+      "license": "MIT",
+      "local_path": "research/upstreams/geoagent"
+    },
+    {
+      "slug": "geolens",
+      "upstream": "geolens-io/geolens",
+      "url": "https://github.com/geolens-io/geolens",
+      "default_branch": "main",
+      "commit": "85043fc1037f8a237ea9181a92a928f97f96deb5",
+      "license": "Apache-2.0",
+      "local_path": "research/upstreams/geolens"
+    },
+    {
+      "slug": "goat",
+      "upstream": "plan4better/goat",
+      "url": "https://github.com/plan4better/goat",
+      "default_branch": "main",
+      "commit": "9bcaf8555dd366c1acd6c08dae1c541dcaceda5c",
+      "license": "GPL-3.0",
+      "local_path": "research/upstreams/goat"
+    },
+    {
+      "slug": "osmnx",
+      "upstream": "gboeing/osmnx",
+      "url": "https://github.com/gboeing/osmnx",
+      "default_branch": "main",
+      "commit": "af346c03401c3f6960ae84617061fa5108533183",
+      "license": "MIT",
+      "local_path": "research/upstreams/osmnx"
+    },
+    {
+      "slug": "valhalla",
+      "upstream": "valhalla/valhalla",
+      "url": "https://github.com/valhalla/valhalla",
+      "default_branch": "master",
+      "commit": "4d8b2061b566412ce61eb8a2001b7cfa2392356a",
+      "license": "verify upstream license",
+      "local_path": "research/upstreams/valhalla"
+    },
+    {
+      "slug": "geoai",
+      "upstream": "opengeos/geoai",
+      "url": "https://github.com/opengeos/geoai",
+      "default_branch": "main",
+      "commit": "87f187e43eaf888eb52a9b2b6ad45ebe4d409f30",
+      "license": "MIT",
+      "local_path": "research/upstreams/geoai"
+    },
+    {
+      "slug": "overturemaps-py",
+      "upstream": "OvertureMaps/overturemaps-py",
+      "url": "https://github.com/OvertureMaps/overturemaps-py",
+      "default_branch": "main",
+      "commit": "e79b5e88d866ef34b41b6b860464fbdc1730aa87",
+      "license": "MIT",
+      "local_path": "research/upstreams/overturemaps-py"
+    },
+    {
+      "slug": "geo-fence",
+      "upstream": "jackson-marcus/Geo-Fence",
+      "url": "https://github.com/jackson-marcus/Geo-Fence",
+      "default_branch": "main",
+      "commit": "6d10129e3efbacb7120ffa684202a20a43d32f37",
+      "license": "verify upstream license",
+      "local_path": "research/upstreams/geo-fence"
+    }
+  ]
+}
